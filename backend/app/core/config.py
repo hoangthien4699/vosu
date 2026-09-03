@@ -128,6 +128,18 @@ class TtsConfig:
     # Streaming theo câu/cụm để giảm time-to-first-audio (§2.4).
     stream_by_sentence: bool = True
     min_sentence_chars: int = 12
+    # Đẩy chunk theo nhịp thời gian thực thay vì dốc hết ra ngay.
+    #
+    # Piper tổng hợp XONG cả câu rồi mới xuất PCM, nên không pace thì server
+    # đẩy toàn bộ audio sang client trong vài ms. Khi người dùng chen lời,
+    # server không còn gì để hủy — toàn bộ đã nằm trong buffer của client, và
+    # contract "server hủy được trong <200ms" (§2.4.1) trở thành vô nghĩa.
+    #
+    # Pace cũng làm giảm lượng audio đã cam kết phát tại thời điểm Barge-in,
+    # nên trực tiếp giảm mức TTS lọt ngược vào mic (B7).
+    realtime_pacing: bool = True
+    # Đẩy trước ngần này để chịu được jitter mạng mà vẫn giữ quyền hủy.
+    pacing_lead_ms: int = 250
 
 
 @dataclass

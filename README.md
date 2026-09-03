@@ -93,9 +93,30 @@ màn hình. Chúng không tự PASS/FAIL, nhưng Gate chưa hoàn tất nếu th
 của chúng — đặc biệt B9, thứ sẽ quyết định có phải thiết kế lại audio routing
 hay không.
 
-Để đo có nghĩa, đặt file WAV **16kHz mono** vào `benchmarks/audio/`. Không có
-thì script tự sinh tín hiệu tổng hợp: số đo latency vẫn hợp lệ, nhưng
-transcript/WER thì không.
+Để đo có nghĩa, đặt file WAV **16kHz mono** vào `benchmarks/audio/`
+(`bash scripts/make_test_audio.sh` sinh nhanh một bộ). Không có thì script tự
+sinh tín hiệu tổng hợp: số đo latency vẫn hợp lệ, nhưng transcript/WER thì
+không — Silero VAD cũng không nhận tín hiệu tổng hợp là speech.
+
+### Số đo tham chiếu trên build macOS (M4, Whisper base, Qwen2.5-3B Metal)
+
+Không phải kết quả Gate — Gate phải chạy trên NVIDIA 6GB. Đây là đường cơ sở
+để so sánh, và để thấy phần nào của ngân sách latency đang bị tiêu ở đâu:
+
+| | Đo được | Target | |
+|---|---|---|---|
+| B1 STT riêng lẻ | 644ms P50 | 400ms | ✗ CPU, không có Metal cho CTranslate2 |
+| B2 LLM TTFT | 80ms P50 | 200ms | ✓ |
+| B2 LLM tổng sinh | 962ms P50 | 500ms | ✗ |
+| B3 TTS time-to-first-audio | 560ms P50 | 400ms | ✗ piper-tts bản Python |
+| B5 E2E P95 | 3796ms | 1500ms | ✗ |
+| B8 Barge-in | < 0.1ms | 200ms | ✓ |
+
+Điều đáng chú ý ở B5: TTFT vẫn giữ ~102ms trong lúc chồng lấn, nhưng E2E lên
+tới 2.3s. Chênh lệch đó không nằm ở LLM — nó nằm ở STT (640ms mỗi câu, chạy
+CPU) cộng thời gian xếp hàng khi các utterance chồng lên nhau qua executor một
+thread. Trên build CUDA, STT được kỳ vọng xuống dưới 400ms và phần xếp hàng co
+lại tương ứng.
 
 ---
 
@@ -128,7 +149,7 @@ backend/app/
 └── api/       websocket.py
 ```
 
-### Năm quyết định đáng biết trước khi sửa code
+### Sáu quyết định đáng biết trước khi sửa code
 
 **1. `1.5s` là ngưỡng partial, KHÔNG phải speech boundary.**
 Final STT luôn do VAD endpoint kích hoạt, áp dụng cho mọi độ dài câu. Nếu chốt
@@ -151,7 +172,14 @@ Whisper + Qwen đã chiếm ~5.1GB/6GB. Thêm TTS lên GPU sẽ vượt trần h
 tranh chấp SM ba chiều. Và "async" trên danh nghĩa là chưa đủ: gọi hàm blocking
 thẳng trong async route vẫn chặn event loop.
 
-**5. Hệ thống là audio hai chiều đóng vòng, không phải pipeline một chiều.**
+**5. TTS được đẩy ra theo nhịp thời gian thực, không dốc hết một lần.**
+Piper tổng hợp xong cả câu rồi mới xuất PCM. Không pace thì server đẩy toàn bộ
+audio sang client trong vài mili-giây — và khi người dùng chen lời, server
+không còn gì để hủy vì tất cả đã nằm trong buffer của client. Contract "server
+hủy được trong <200ms" của §2.4.1 khi đó chỉ đúng trên giấy. `B8` sẽ báo ERROR
+nếu phát hiện mình chỉ đang đo những lần hủy no-op.
+
+**6. Hệ thống là audio hai chiều đóng vòng, không phải pipeline một chiều.**
 Khi TTS phát qua earbud, audio output có thể trở thành input của chính hệ
 thống. Barge-in không phải tính năng thêm vào — nó là điều kiện để hệ thống
 không tự nói chuyện với chính mình.
@@ -183,6 +211,12 @@ Những test đáng đọc trước khi sửa code:
 ---
 
 ## Còn chưa giải quyết
+
+**Qwen2.5-3B rò tiếng Trung vào bản dịch tiếng Việt.** Quan sát thật khi chạy
+LLM: `"Tôi nghĩ chúng ta nên推迟这次讨论目前。"`. Model 3B lượng tử hóa 4-bit
+không giữ vững ngôn ngữ đích. Đây là vấn đề model/prompt, không phải lỗi code —
+parser vẫn hoạt động đúng. Cần thử: siết prompt, thêm few-shot tiếng Việt, hoặc
+đánh giá model khác. Nên xử lý trước khi demo.
 
 Hai rủi ro chỉ mới có kế hoạch đo, chưa có lời giải kỹ thuật:
 

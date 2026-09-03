@@ -12,9 +12,14 @@ import time
 
 from .common import BenchmarkResult, Check, Distribution, base_parser, run_cli
 
+# Phải đủ dài để TTS còn đang phát khi ta ngắt. Nếu nó đọc xong trước thì
+# phép đo trở thành vô nghĩa — và benchmark PHẢI phát hiện, không được ghi
+# nhận một cancel no-op như thể là 0ms.
 LONG_TEXT = (
     "Tôi nghĩ rằng chúng ta nên tạm gác lại cuộc thảo luận này và quay lại vào "
-    "tuần sau khi mọi người đã có đủ thông tin cần thiết để đưa ra quyết định."
+    "tuần sau khi mọi người đã có đủ thông tin cần thiết để đưa ra quyết định "
+    "cuối cùng về hướng đi của dự án, bởi vì hiện tại vẫn còn khá nhiều điểm "
+    "chưa rõ ràng và chúng ta không nên vội vàng chốt lại bất cứ điều gì."
 )
 
 
@@ -36,6 +41,7 @@ async def _run(args) -> BenchmarkResult:
     response_times: list[float] = []
     time_to_last_chunk: list[float] = []
     failures = 0
+    no_op_cancels = 0
 
     for i in range(runs):
         chunks = 0
@@ -68,6 +74,13 @@ async def _run(args) -> BenchmarkResult:
         outcome = await engine.cancel(reason="barge_in")
         await task
 
+        if not outcome.cancelled:
+            # TTS đã đọc xong trước khi ta kịp ngắt — KHÔNG có gì để hủy, nên
+            # 0ms ở đây không phải một phép đo. Ghi nhận riêng, tuyệt đối không
+            # trộn vào phân bố: làm vậy sẽ tạo ra PASS giả trên một mục P0.
+            no_op_cancels += 1
+            continue
+
         response_times.append(outcome.response_ms)
         # Thời gian tới chunk CUỐI CÙNG thực sự phát ra sau tín hiệu — đây mới
         # là thứ người nghe cảm nhận được, chặt chẽ hơn response_ms.
@@ -78,6 +91,18 @@ async def _run(args) -> BenchmarkResult:
 
     await engine.close()
 
+    # Không đủ lần ngắt THẬT thì không có gì để kết luận — báo lỗi thay vì
+    # PASS trên một phân bố rỗng hoặc thưa.
+    minimum = max(3, runs // 2)
+    if len(response_times) < minimum:
+        result.error = (
+            f"Chỉ ngắt thật được {len(response_times)}/{runs} lần "
+            f"({no_op_cancels} lần TTS đã đọc xong trước khi kịp ngắt, "
+            f"{failures} lần không vào được PLAYING). "
+            "Cần câu dài hơn hoặc TTS chậm hơn để phép đo có nghĩa."
+        )
+        return result
+
     response_dist = Distribution.of(response_times)
     audible_dist = Distribution.of(time_to_last_chunk)
     target = config.benchmark.barge_in_ms
@@ -86,10 +111,13 @@ async def _run(args) -> BenchmarkResult:
         Check("Thời gian phản hồi P95", response_dist.p95, target),
         Check("Thời gian phản hồi Max", response_dist.max, target),
         Check("Audio còn phát ra sau tín hiệu P95", audible_dist.p95, target),
+        Check("Số lần ngắt thật", float(len(response_times)), None, unit="", mode="record"),
     ]
     result.details = {
         "phản hồi": response_dist.summary(),
         "audio còn lọt ra": audible_dist.summary(),
+        "ngắt thật / tổng": f"{len(response_times)}/{runs}",
+        "TTS đọc xong trước khi ngắt": no_op_cancels,
         "lần không vào được PLAYING": failures,
         "ghi chú": "Đo phía server; độ trễ buffer phát lại ở client đo riêng.",
     }

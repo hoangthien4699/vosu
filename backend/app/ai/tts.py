@@ -189,6 +189,12 @@ class PiperTts:
             2, int(self._config.tts.sample_rate * self._config.tts.chunk_ms / 1000) * 2
         )
 
+        pacing = self._config.tts.realtime_pacing
+        lead_s = self._config.tts.pacing_lead_ms / 1000.0
+        bytes_per_second = self._config.tts.sample_rate * 2   # PCM16 mono
+        emitted_bytes = 0
+        stream_started: float | None = None
+
         try:
             process.stdin.write(text.encode("utf-8") + b"\n")
             await process.stdin.drain()
@@ -217,6 +223,7 @@ class PiperTts:
 
                 if first:
                     first = False
+                    stream_started = time.monotonic()
                     async with self._lock:
                         if self._state is TtsState.SYNTHESIZING:
                             self._transition(TtsState.PLAYING)
@@ -225,6 +232,21 @@ class PiperTts:
                 if on_chunk is not None:
                     on_chunk(data, self._chunks_sent)
                 yield data
+                emitted_bytes += len(data)
+
+                if pacing and stream_started is not None:
+                    # Giữ lượng audio đã đẩy đi không vượt thời gian thực quá
+                    # `lead_s`. Chờ trên cờ hủy chứ không sleep suông, để
+                    # Barge-in vẫn cắt được ngay giữa nhịp chờ.
+                    audio_s = emitted_bytes / bytes_per_second
+                    ahead = audio_s - (time.monotonic() - stream_started) - lead_s
+                    if ahead > 0:
+                        with contextlib.suppress(asyncio.TimeoutError):
+                            await asyncio.wait_for(
+                                self._cancel_event.wait(), timeout=ahead
+                            )
+                        if self._cancel_event.is_set():
+                            break
 
         finally:
             await self._terminate_process()
@@ -272,6 +294,22 @@ class PiperTts:
                 process.kill()
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(process.wait(), timeout=1.0)
+
+        # Đóng transport ngay thay vì để bộ thu gom rác lo.
+        #
+        # Ta thoát vòng đọc giữa chừng khi Barge-in, nên pipe stdout vẫn mở.
+        # asyncio chỉ đóng nó lúc transport bị GC — và nếu điều đó xảy ra sau
+        # khi event loop đã đóng thì __del__ ném "RuntimeError: Event loop is
+        # closed". Vô hại, nhưng đủ ồn để che một lỗi thật ở lần chạy sau.
+        #
+        # Không có API công khai cho việc này; `_transport` được bọc trong
+        # getattr + suppress để bản Python nào không có nó thì chỉ quay lại
+        # hành vi cũ chứ không hỏng.
+        transport = getattr(process, "_transport", None)
+        if transport is not None:
+            with contextlib.suppress(Exception):
+                transport.close()
+        await asyncio.sleep(0)
 
     async def close(self) -> None:
         self._cancel_event.set()

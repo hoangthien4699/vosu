@@ -57,6 +57,10 @@ tts:
   auto_read_intent: false        # chỉ hiển thị UI
   auto_read_replies: false       # chỉ đọc khi người dùng bấm chọn
   stream_by_sentence: true
+  # Đẩy chunk theo nhịp thời gian thực. Tắt đi thì server dốc hết audio sang
+  # client ngay lập tức và mất khả năng hủy giữa chừng (§2.4.1).
+  realtime_pacing: true
+  pacing_lead_ms: 250
 
 vram:
   expected_gb: 5.0
