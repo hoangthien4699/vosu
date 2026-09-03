@@ -30,6 +30,15 @@ Vì code không phân kỳ nên merge gần như không bao giờ xung đột.
 git checkout release-mac && git merge main    # hoặc release
 ```
 
+**Chỉ merge một chiều: `main` → release.** Merge ngược, hoặc cherry-pick một
+commit có đụng `config.yaml`, sẽ kéo cấu hình của một build sang `main` và phá
+vỡ đúng thứ chiến lược này bảo vệ. Nếu phải sửa trên nhánh release rồi đưa lên
+`main`, tách làm hai commit: một cho code, một cho `config.yaml` — rồi chỉ
+cherry-pick commit code.
+
+CI chặn cả hai kiểu hỏng: `main` không được chứa `config.yaml`/`BUILD.md`, và
+hai nhánh release không được phân kỳ file `.py`/`.js`/`.html`/`.css`.
+
 ## Hai build
 
 Một codebase, hai cấu hình phần cứng. Mọi khác biệt đi qua `DeviceProfile`
