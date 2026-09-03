@@ -77,7 +77,8 @@ echo "==> Piper binary"
 if have piper; then
   echo "  đã có: $(command -v piper)"
 else
-  echo "  CHƯA CÓ.  macOS: brew install piper   |   pip: pip install piper-tts"
+  # Không có formula Homebrew tên `piper` — chỉ có đường pip.
+  echo "  CHƯA CÓ.  Cài bằng: pip install piper-tts"
 fi
 
 echo

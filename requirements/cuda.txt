@@ -4,8 +4,8 @@
 #   - NVIDIA driver + CUDA 12.x
 #   - cuBLAS + cuDNN 9 (faster-whisper/CTranslate2 cần)
 #   - binary `llama-server` build với -DGGML_CUDA=ON  -> models/llama-server
-#   - `piper` binary trong PATH
 -r base.txt
 
-faster-whisper==1.1.1
-ctranslate2==4.5.0
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+piper-tts==1.7.0        # cung cấp binary `piper` — Homebrew KHÔNG có formula này

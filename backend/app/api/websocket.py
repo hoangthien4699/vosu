@@ -21,6 +21,7 @@ import contextlib
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -36,6 +37,16 @@ from ..protocol.schemas import ClientControl, SchemaValidationError, validate_ev
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@dataclass
+class _TtsItem:
+    """Một mẩu cần đọc. `is_end` đánh dấu utterance đã hết phần cần đọc."""
+
+    utterance_id: str
+    text: str = ""
+    field: str = "translation"
+    is_end: bool = False
 
 
 @router.websocket("/ws/copilot")
@@ -102,7 +113,12 @@ class CopilotSession:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._pipeline_task: asyncio.Task | None = None
         self._partial_task: asyncio.Task | None = None
-        self._tts_task: asyncio.Task | None = None
+        # TTS chạy qua hàng đợi + worker riêng. Nếu await ngay trong vòng lặp
+        # token của LLM thì token stream bị treo suốt lúc phát tiếng — đúng
+        # thứ §2.4 cấm ("TTS là nhánh song song, không chặn E2E của text").
+        self._tts_queue: asyncio.Queue[_TtsItem | None] = asyncio.Queue()
+        self._tts_worker: asyncio.Task | None = None
+        self._tts_current: asyncio.Task | None = None
         self._audio_started = False
         self._dropped_audio_chunks = 0
         self._tts_available = config.tts.enabled
@@ -112,6 +128,10 @@ class CopilotSession:
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
         sender = asyncio.create_task(self._sender_loop(), name=f"sender-{self.session_id}")
+        if self.tts is not None:
+            self._tts_worker = asyncio.create_task(
+                self._tts_worker_loop(), name=f"tts-{self.session_id}"
+            )
 
         await self.bus.emit(
             EventType.SESSION_STARTED,
@@ -196,8 +216,11 @@ class CopilotSession:
         if self.tts is None:
             return
         job = self.tts.current_job
+        dropped = self._drain_tts_queue()
         result = await self.tts.cancel(reason="barge_in")
         if not result.cancelled:
+            if dropped:
+                logger.debug("Barge-in: bỏ %d mẩu chưa đọc", dropped)
             return
         await self.bus.emit(
             EventType.TTS_CANCELLED,
@@ -250,6 +273,9 @@ class CopilotSession:
             self._pipeline_task.cancel()
         if self._partial_task is not None and not self._partial_task.done():
             self._partial_task.cancel()
+        # Utterance mới chiếm chỗ: mọi thứ còn chờ đọc của câu cũ không còn
+        # ý nghĩa — hội thoại đã đi tiếp.
+        self._drain_tts_queue()
 
         utterance = self.state.begin_utterance()
         utterance.mark_endpoint()
@@ -336,16 +362,20 @@ class CopilotSession:
         # --- TTS phần translation còn lại ---
         remainder = splitter.flush()
         if remainder and self._should_speak("translation"):
-            await self._speak(utterance_id, remainder, field="translation")
+            self._speak(utterance_id, remainder, field="translation")
 
         if self.config.tts.auto_read_intent and parser.result.intent:
-            await self._speak(utterance_id, parser.result.intent, field="intent")
+            self._speak(utterance_id, parser.result.intent, field="intent")
 
-        if self.state.get(utterance_id) is not None and not utterance.is_terminal:
-            if utterance.state is UtteranceState.SPEAKING:
-                self.state.transition(utterance_id, UtteranceState.DONE)
-            elif utterance.state is UtteranceState.COPILOT:
-                self.state.transition(utterance_id, UtteranceState.DONE)
+        # Utterance chỉ DONE sau khi worker đọc hết phần đã xếp hàng. Nếu
+        # chuyển DONE ngay ở đây thì các mẩu còn trong hàng đợi sẽ bị worker
+        # bỏ qua vì utterance đã ở trạng thái kết thúc.
+        if not utterance.is_terminal:
+            if self._tts_available and self.tts is not None:
+                self._mark_speech_end(utterance_id)
+            else:
+                with contextlib.suppress(Exception):
+                    self.state.transition(utterance_id, UtteranceState.DONE)
 
     async def _emit_semantic(self, utterance_id, event, utterance, splitter) -> None:
         if isinstance(event, TranslationDelta):
@@ -359,7 +389,7 @@ class CopilotSession:
             # một câu hoàn chỉnh, không đợi cả JSON.
             if self._should_speak("translation") and self.config.tts.stream_by_sentence:
                 for sentence in splitter.feed(event.text):
-                    await self._speak(utterance_id, sentence, field="translation")
+                    self._speak(utterance_id, sentence, field="translation")
 
         elif isinstance(event, IntentDone):
             utterance.mark_first_useful()
@@ -389,24 +419,63 @@ class CopilotSession:
             "reply": cfg.auto_read_replies,
         }.get(field, False)
 
-    async def _speak(self, utterance_id: str, text: str, *, field: str) -> None:
-        """Đọc một đoạn. Đợi đoạn trước xong để giọng không chồng lên nhau."""
-        if self.tts is None:
+    def _speak(self, utterance_id: str, text: str, *, field: str) -> None:
+        """Xếp một đoạn vào hàng đợi đọc. KHÔNG chờ đọc xong.
+
+        Worker phát tuần tự nên giọng không chồng lên nhau, nhưng vòng lặp
+        token của LLM vẫn chạy tiếp trong lúc đó.
+        """
+        if self.tts is None or not self._tts_available:
             return
-
-        if self._tts_task is not None and not self._tts_task.done():
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._tts_task
-
-        utterance = self.state.get(utterance_id)
-        if utterance is None or utterance.is_terminal:
+        if not text.strip():
             return
-        if utterance.state is UtteranceState.COPILOT:
-            self.state.transition(utterance_id, UtteranceState.SPEAKING)
+        self._tts_queue.put_nowait(_TtsItem(utterance_id, text, field))
 
-        self._tts_task = asyncio.create_task(self._run_tts(utterance_id, text, field))
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._tts_task
+    def _mark_speech_end(self, utterance_id: str) -> None:
+        if self.tts is None or not self._tts_available:
+            return
+        self._tts_queue.put_nowait(_TtsItem(utterance_id, is_end=True))
+
+    async def _tts_worker_loop(self) -> None:
+        """Đọc tuần tự từng mẩu trong hàng đợi."""
+        try:
+            while True:
+                item = await self._tts_queue.get()
+                if item is None:
+                    return
+
+                utterance = self.state.get(item.utterance_id)
+                if utterance is None or utterance.is_terminal:
+                    continue
+
+                if item.is_end:
+                    if utterance.state in (UtteranceState.SPEAKING, UtteranceState.COPILOT):
+                        with contextlib.suppress(Exception):
+                            self.state.transition(item.utterance_id, UtteranceState.DONE)
+                    continue
+
+                if utterance.state is UtteranceState.COPILOT:
+                    self.state.transition(item.utterance_id, UtteranceState.SPEAKING)
+
+                self._tts_current = asyncio.create_task(
+                    self._run_tts(item.utterance_id, item.text, item.field)
+                )
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._tts_current
+                self._tts_current = None
+        except asyncio.CancelledError:
+            raise
+
+    def _drain_tts_queue(self) -> int:
+        """Bỏ mọi mẩu chưa đọc. Dùng khi Barge-in hoặc utterance mới chiếm chỗ."""
+        dropped = 0
+        while True:
+            try:
+                item = self._tts_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return dropped
+            if item is not None and not item.is_end:
+                dropped += 1
 
     async def _run_tts(self, utterance_id: str, text: str, field: str) -> None:
         assert self.tts is not None
@@ -484,6 +553,7 @@ class CopilotSession:
 
         if control.action == "cancel_tts" and self.tts is not None:
             job = self.tts.current_job
+            self._drain_tts_queue()
             result = await self.tts.cancel(reason="client_request")
             if result.cancelled:
                 await self.bus.emit(
@@ -504,7 +574,7 @@ class CopilotSession:
             if text is None and control.reply_index is not None:
                 return  # danh sách reply do client giữ; yêu cầu gửi kèm text
             if text:
-                await self._speak(utterance.id, text, field="reply")
+                self._speak(utterance.id, text, field="reply")
             return
 
         if control.action == "reset":
@@ -516,7 +586,9 @@ class CopilotSession:
     async def _cancel_all_work(self) -> None:
         if self.tts is not None:
             await self.tts.cancel(reason="session_end")
-        for task in (self._pipeline_task, self._partial_task, self._tts_task):
+        self._drain_tts_queue()
+        for task in (self._pipeline_task, self._partial_task, self._tts_current,
+                     self._tts_worker):
             if task is not None and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):

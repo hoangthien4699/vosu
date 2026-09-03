@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import sys
 
 import numpy as np
 import pytest
@@ -227,3 +228,122 @@ def test_control_frame_sai_bi_bao_loi_khong_lam_sap(client):
         assert event["data"]["recoverable"] is True
         # kết nối vẫn sống
         ws.send_text(json.dumps({"action": "ping"}))
+
+
+# --------------------------------------------------------------------------- #
+# TTS trong pipeline (§2.4 — TTS là nhánh song song, không chặn E2E của text)
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def tts_client(monkeypatch, tmp_path):
+    """Như `client` nhưng bật TTS, dùng script Piper giả lập."""
+    import asyncio
+    from pathlib import Path
+
+    voice = tmp_path / "voice.onnx"
+    voice.write_bytes(b"stub")
+
+    cfg = load_config(env={})
+    cfg.tts.enabled = True
+    cfg.tts.stream_by_sentence = True
+    cfg.tts.min_sentence_chars = 8
+    cfg.paths.piper_bin = sys.executable
+    cfg.paths.piper_voice_vi = str(voice)
+    cfg.paths.piper_voice_en = str(voice)
+    cfg.vad.backend = "energy"
+    cfg.chunker.enable_partial = False
+
+    fixtures = Path(__file__).parent / "fixtures"
+    real_exec = asyncio.create_subprocess_exec
+
+    async def patched(program, *args, **kwargs):
+        return await real_exec(program, str(fixtures / "fake_piper.py"), *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", patched)
+    monkeypatch.setenv("VOSU_FAKE_PIPER_CHUNKS", "4")
+    monkeypatch.setenv("VOSU_FAKE_PIPER_DELAY", "0.01")
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.config = cfg
+    app.state.runtime = FakeRuntime()
+    return TestClient(app)
+
+
+def test_text_hoan_tat_truoc_khi_tts_doc_xong(tts_client):
+    """§2.4: text phải hiển thị ngay, KHÔNG đợi TTS hoàn tất.
+
+    Nếu TTS được await ngay trong vòng lặp token của LLM thì copilot_done sẽ
+    bị đẩy ra sau tts_done — nghĩa là token stream đã bị treo trong lúc phát
+    tiếng, và toàn bộ lợi ích của LLM streaming mất sạch.
+    """
+    with tts_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        payload = utterance_stream()
+        for i in range(0, len(payload), 3200):
+            ws.send_bytes(payload[i : i + 3200])
+        events = drain(ws, "copilot_done", limit=400)
+
+    types = [e["type"] for e in events]
+    assert "copilot_done" in types
+    assert types.index("copilot_done") == len(types) - 1
+    # Phải có ít nhất một reply_ready TRƯỚC copilot_done: nghĩa là LLM stream
+    # đã chạy hết trong khi TTS còn đang đọc ở nhánh khác.
+    assert "reply_ready" in types
+    assert types.index("reply_ready") < types.index("copilot_done")
+
+
+def test_tts_phat_su_kien_va_gui_binary(tts_client):
+    with tts_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        payload = utterance_stream()
+        for i in range(0, len(payload), 3200):
+            ws.send_bytes(payload[i : i + 3200])
+
+        seen_types, binary_frames = [], 0
+        for _ in range(400):
+            message = ws.receive()
+            if message.get("bytes") is not None:
+                binary_frames += 1
+                continue
+            if not message.get("text"):
+                continue
+            event = json.loads(message["text"])
+            seen_types.append(event["type"])
+            if event["type"] == "tts_done":
+                break
+
+    assert "tts_started" in seen_types
+    assert "tts_audio_chunk" in seen_types
+    assert "tts_done" in seen_types
+    assert binary_frames > 0, "không có frame PCM nào được gửi"
+
+
+def test_cancel_tts_tu_client_dung_va_don_hang_doi(tts_client):
+    with tts_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        payload = utterance_stream()
+        for i in range(0, len(payload), 3200):
+            ws.send_bytes(payload[i : i + 3200])
+
+        # đợi tới khi TTS bắt đầu rồi mới hủy
+        for _ in range(400):
+            message = ws.receive()
+            if message.get("text") and json.loads(message["text"])["type"] == "tts_started":
+                break
+        ws.send_text(json.dumps({"action": "cancel_tts"}))
+
+        cancelled = None
+        for _ in range(200):
+            message = ws.receive()
+            if not message.get("text"):
+                continue
+            event = json.loads(message["text"])
+            if event["type"] == "tts_cancelled":
+                cancelled = event
+                break
+
+    assert cancelled is not None, "không nhận được tts_cancelled"
+    assert cancelled["data"]["reason"] == "client_request"
+    assert cancelled["data"]["response_ms"] < 200.0
+    assert cancelled["utterance_id"], "tts_cancelled phải nói rõ hủy utterance nào"

@@ -26,7 +26,9 @@ if ! command -v brew >/dev/null 2>&1; then
   echo "LỖI: cần Homebrew — https://brew.sh" >&2
   exit 1
 fi
-for pkg in llama.cpp piper portaudio; do
+# Homebrew KHÔNG có formula `piper` (gõ `brew install piper` sẽ ra `piphero`).
+# Piper cài qua pip ở bước Python bên dưới.
+for pkg in llama.cpp portaudio; do
   if brew list "$pkg" >/dev/null 2>&1; then
     echo "  đã có: $pkg"
   else
@@ -40,6 +42,7 @@ echo "==> Môi trường Python"
 python3 -m venv .venv 2>/dev/null || true
 .venv/bin/pip install --upgrade pip -q
 .venv/bin/pip install -r requirements/macos.txt -r requirements/dev.txt
+.venv/bin/pip install piper-tts -q || echo "  (piper-tts không cài được — TTS sẽ tắt)"
 .venv/bin/pip install sounddevice -q || echo "  (sounddevice không cài được — B7/B9/B10 sẽ SKIP)"
 
 echo

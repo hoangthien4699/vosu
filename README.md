@@ -44,7 +44,7 @@ Cả hai script đều kiểm tra phần cứng, cài Python deps, rồi tải m
 Yêu cầu ở tầng hệ thống (không cài qua pip được):
 
 - **CUDA**: driver NVIDIA + CUDA 12.x + cuDNN 9; `llama-server` build với `-DGGML_CUDA=ON`
-- **macOS**: `brew install llama.cpp piper portaudio`
+- **macOS**: `brew install llama.cpp portaudio` (Piper cài qua pip — Homebrew không có formula `piper`)
 
 ### Chạy
 
