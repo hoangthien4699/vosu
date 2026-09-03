@@ -54,6 +54,10 @@ llm:
   # Dùng sai template thì model vẫn sinh chữ, chỉ là chất lượng tệ đi khó
   # truy vết; không có lỗi nào được ném ra.
   prompt_template: auto
+  # Giữ toàn bộ KV cache — BẮT BUỘC với Gemma 3 (sliding-window attention).
+  # Thiếu cờ này, mỗi utterance phải xử lý lại toàn bộ system prompt:
+  # 241 token/610ms thay vì 15 token/86ms. No-op với model không dùng SWA.
+  swa_full: true
   startup_timeout_s: 90.0
 
 tts:

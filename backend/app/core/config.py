@@ -35,7 +35,7 @@ class PathsConfig:
     models_dir: str = "models"
     # faster-whisper: tên model trên HF hoặc đường dẫn thư mục đã convert.
     whisper_model: str = "small"
-    llm_gguf: str = "models/qwen2.5-3b-instruct-q4_k_m.gguf"
+    llm_gguf: str = "models/gemma-3-4b-it-q4_k_m.gguf"
     llama_server_bin: str = "models/llama-server"
     piper_bin: str = "piper"
     piper_voice_vi: str = "models/piper/vi_VN-vais1000-medium.onnx"
@@ -112,6 +112,16 @@ class LlmConfig:
     # "auto" suy từ tên file GGUF. Dùng SAI template thì model vẫn sinh chữ,
     # chỉ là chất lượng tệ đi khó truy vết — không có lỗi nào được ném ra.
     prompt_template: str = "auto"
+    # Giữ toàn bộ KV cache cho model dùng sliding-window attention (Gemma 3).
+    #
+    # Không bật thì llama.cpp KHÔNG tái dùng được prefix cache giữa các
+    # utterance khác nhau, và mỗi câu phải xử lý lại toàn bộ system prompt.
+    # Đo trên M4 với Gemma 3 4B: 241 token/610ms mỗi lần, so với 15 token/86ms
+    # khi bật — TTFT chênh 7 lần.
+    #
+    # Với model không dùng SWA (Qwen) cờ này là no-op. Chi phí bộ nhớ ở
+    # n_ctx=2048 đo được là không đáng kể (2780 so với 2790 MB).
+    swa_full: bool = True
     extra_args: list[str] = field(default_factory=list)
 
     @property

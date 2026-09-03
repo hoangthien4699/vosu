@@ -72,7 +72,7 @@ def cjk_chars(text: str) -> list[str]:
 
 async def evaluate(model_path: Path, runs: int, n_predict: int) -> ModelReport:
     from app.ai.copilot import SemanticEventParser
-    from app.ai.llm import GenerationStats, LlmClient
+    from app.ai.llm import LlmClient
     from app.core.config import load_config
     from app.core.vram_manager import LlamaServerManager
 
@@ -96,11 +96,9 @@ async def evaluate(model_path: Path, runs: int, n_predict: int) -> ModelReport:
         for index in range(runs):
             language, text = UTTERANCES[index % len(UTTERANCES)]
             parser = SemanticEventParser()
-            stats = GenerationStats()
             try:
-                raw, stats = await client.complete(
-                    client.build_prompt(text, language), stats=stats
-                )
+                # complete() tự tạo GenerationStats và trả về — không truyền vào
+                raw, stats = await client.complete(client.build_prompt(text, language))
             except Exception as exc:
                 report.errors += 1
                 report.samples.append({"input": text, "error": str(exc)[:120]})
@@ -117,9 +115,11 @@ async def evaluate(model_path: Path, runs: int, n_predict: int) -> ModelReport:
 
             if not result.malformed:
                 report.json_ok += 1
-            leaked = cjk_chars(result.translation) if language != "zh" and language != "ja" else []
-            # với nguồn tiếng Trung/Nhật, ký tự CJK trong `intent`/`replies` là
-            # bình thường — chỉ soi phần translation, và chỉ khi nguồn không CJK
+            # Bản dịch phải LUÔN là tiếng Việt thuần, nên ký tự CJK trong đó
+            # là lỗi bất kể nguồn nói tiếng gì. Chỉ soi `translation` —
+            # `replies` mang ký tự CJK là ĐÚNG khi người nói dùng tiếng Trung
+            # hoặc Nhật, vì người dùng cần nói lại bằng chính ngôn ngữ đó.
+            leaked = cjk_chars(result.translation)
             if leaked:
                 report.leaked += 1
             if not result.translation.strip():
