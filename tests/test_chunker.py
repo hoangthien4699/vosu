@@ -6,7 +6,6 @@ mà 5 vòng review đã loại bỏ.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from app.audio.chunker import AudioChunker, SegmentKind
 from app.audio.vad import EnergyVadBackend, VadProcessor

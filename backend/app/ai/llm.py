@@ -1,0 +1,176 @@
+"""Wrapper `llama-server` (Task E2).
+
+Đặc tả §4.4: PHẢI streaming, không batch request. Cách gọi ở baseline v1
+(`await http_client.post(...)` rồi chờ `res.json()`) khiến client không thấy gì
+cho tới khi LLM sinh xong toàn bộ JSON.
+
+Module này chỉ lo token stream thô + đo TTFT. Việc biến token thành semantic
+event là của `ai/copilot.py` — hai abstraction khác nhau (§4.4).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+SYSTEM_PROMPT = """You are a real-time conversational copilot for a user wearing earbuds.
+The user hears someone speaking a foreign language. Analyze that speech.
+
+Respond with ONE compact JSON object and nothing else. No markdown, no code fence.
+Schema:
+{"translation":"<Vietnamese translation>","intent":"<speaker intent, max 10 words>","replies":["<short reply the user can say>","<a second, different reply>"]}
+
+Rules:
+- "translation" is Vietnamese. Keep it natural, not literal.
+- "intent" explains what the speaker actually wants. Vietnamese, under 10 words.
+- "replies" are in the SAME language the speaker used, so the user can say them back.
+- Exactly 2 replies. Keep each under 15 words.
+- Output the JSON immediately. Do not explain."""
+
+
+def build_prompt(text: str, language: str | None) -> str:
+    """Prompt template ChatML của Qwen2.5."""
+    lang = language or "unknown"
+    return (
+        f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n"
+        f"<|im_start|>user\nLanguage: {lang}\nSpeech: \"{text}\"<|im_end|>\n"
+        f"<|im_start|>assistant\n"
+    )
+
+
+@dataclass
+class GenerationStats:
+    ttft_ms: float | None = None
+    total_ms: float = 0.0
+    tokens: int = 0
+    #: model dừng vì chạm n_predict thay vì sinh xong -> JSON có thể bị cụt
+    truncated: bool = False
+    stop_reason: str = ""
+    raw: str = field(default="", repr=False)
+
+
+class LlmClient:
+    """Client streaming tới endpoint `/completion` của llama-server."""
+
+    def __init__(self, config) -> None:
+        self._config = config
+        self._client: httpx.AsyncClient | None = None
+
+    async def start(self) -> None:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self._config.llm.base_url,
+                timeout=httpx.Timeout(self._config.llm.request_timeout_s, connect=5.0),
+            )
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    def _require_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            raise RuntimeError("LlmClient chưa start()")
+        return self._client
+
+    async def health(self) -> bool:
+        try:
+            response = await self._require_client().get("/health", timeout=2.0)
+        except httpx.HTTPError:
+            return False
+        return response.status_code == 200
+
+    # ------------------------------------------------------------------ #
+
+    async def stream(
+        self,
+        prompt: str,
+        *,
+        stats: GenerationStats | None = None,
+        n_predict: int | None = None,
+    ) -> AsyncIterator[str]:
+        """Sinh token. `stats` (nếu truyền vào) được cập nhật tại chỗ.
+
+        TTFT được đo từ lúc gửi request tới token ĐẦU TIÊN — đây là con số
+        quyết định perceived latency, không phải tổng thời gian sinh (§7).
+        """
+        cfg = self._config.llm
+        stats = stats if stats is not None else GenerationStats()
+        payload = {
+            "prompt": prompt,
+            "temperature": cfg.temperature,
+            "top_p": cfg.top_p,
+            "n_predict": n_predict if n_predict is not None else cfg.n_predict,
+            "stream": True,
+            "cache_prompt": True,
+            "stop": ["<|im_end|>", "<|im_start|>"],
+        }
+
+        started = time.perf_counter()
+        chunks: list[str] = []
+        try:
+            async with self._require_client().stream(
+                "POST", "/completion", json=payload
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    token = _parse_sse_line(line)
+                    if token is None:
+                        continue
+                    content, stop, stop_reason = token
+                    if content:
+                        if stats.ttft_ms is None:
+                            stats.ttft_ms = (time.perf_counter() - started) * 1000.0
+                        stats.tokens += 1
+                        chunks.append(content)
+                        yield content
+                    if stop:
+                        stats.stop_reason = stop_reason
+                        stats.truncated = stop_reason == "limit"
+                        break
+        finally:
+            stats.total_ms = (time.perf_counter() - started) * 1000.0
+            stats.raw = "".join(chunks)
+
+    async def complete(self, prompt: str, **kwargs) -> tuple[str, GenerationStats]:
+        """Gom toàn bộ output. Dùng cho benchmark và test, KHÔNG dùng trong pipeline."""
+        stats = GenerationStats()
+        parts = [chunk async for chunk in self.stream(prompt, stats=stats, **kwargs)]
+        return "".join(parts), stats
+
+
+def _parse_sse_line(line: str) -> tuple[str, bool, str] | None:
+    """Trả về (content, stop, stop_reason) hoặc None nếu dòng không mang dữ liệu.
+
+    llama-server phát Server-Sent Events: `data: {...}`. Dòng trống là ngăn cách
+    giữa các event, không phải lỗi.
+    """
+    if not line or not line.startswith("data:"):
+        return None
+    body = line[5:].strip()
+    if not body or body == "[DONE]":
+        return ("", True, "done") if body == "[DONE]" else None
+    try:
+        message = json.loads(body)
+    except json.JSONDecodeError:
+        logger.debug("Bỏ qua dòng SSE không parse được: %r", body[:120])
+        return None
+
+    content = message.get("content", "")
+    stop = bool(message.get("stop", False))
+    reason = ""
+    if stop:
+        if message.get("stopped_limit"):
+            reason = "limit"
+        elif message.get("stopped_word") or message.get("stopped_eos"):
+            reason = "stop_word"
+        else:
+            reason = "done"
+    return content, stop, reason

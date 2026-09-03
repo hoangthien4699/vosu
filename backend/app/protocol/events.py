@@ -178,7 +178,7 @@ class EventBus:
         self._closed = True
         await self._queue.put(None)
 
-    def __aiter__(self) -> "EventBus":
+    def __aiter__(self) -> EventBus:
         return self
 
     async def __anext__(self) -> Event:

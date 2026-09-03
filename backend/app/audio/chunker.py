@@ -22,9 +22,9 @@ from __future__ import annotations
 
 import logging
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterator
 
 import numpy as np
 

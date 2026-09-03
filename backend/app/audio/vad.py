@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Iterator, Protocol
+from typing import Protocol
 
 import numpy as np
 

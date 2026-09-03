@@ -16,7 +16,7 @@ import json
 import os
 import types
 from dataclasses import dataclass, field, fields, is_dataclass
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
@@ -216,7 +216,7 @@ _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
 
-@lru_cache(maxsize=None)
+@cache
 def _hints(cls: type) -> dict[str, Any]:
     """Phân giải annotation thành type object thật.
 
@@ -357,7 +357,7 @@ def _asdict_public(obj: Any) -> Any:
             for f in fields(obj)
             if not f.name.startswith("_")
         }
-    if isinstance(obj, (list, tuple)):
+    if isinstance(obj, list | tuple):
         return [_asdict_public(v) for v in obj]
     return obj
 

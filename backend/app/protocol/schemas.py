@@ -155,7 +155,7 @@ class EventEnvelope(_Strict):
     data: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _check(self) -> "EventEnvelope":
+    def _check(self) -> EventEnvelope:
         if self.type in UTTERANCE_SCOPED and not self.utterance_id:
             raise ValueError(
                 f"event {self.type.value!r} thuộc phạm vi utterance nhưng thiếu utterance_id"
