@@ -24,7 +24,13 @@ import logging
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 
-from .json_stream import IncrementalJsonParser, ParseEvent, StringDelta, ValueDone
+from .json_stream import (
+    ContainerDone,
+    IncrementalJsonParser,
+    ParseEvent,
+    StringDelta,
+    ValueDone,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +55,8 @@ class IntentDone:
 class ReplyReady:
     index: int
     text: str
+    #: Vì sao người dùng có thể chọn câu này. Rỗng nếu model không sinh ra.
+    purpose: str = ""
 
 
 SemanticEvent = TranslationDelta | IntentDone | ReplyReady
@@ -82,6 +90,8 @@ class SemanticEventParser:
         self.result = CopilotResult()
         self._emitted_replies: set[int] = set()
         self._intent_emitted = False
+        #: reply đang gom dở: index -> {"text": ..., "purpose": ...}
+        self._pending_replies: dict[int, dict[str, str]] = {}
 
     @property
     def malformed(self) -> bool:
@@ -92,6 +102,12 @@ class SemanticEventParser:
 
     def finish(self) -> list[SemanticEvent]:
         events = self._map(self._json.finish())
+        # JSON bị cắt giữa chừng vẫn phải giao reply đã gom được — thà thiếu
+        # `purpose` còn hơn mất luôn câu gợi ý.
+        for index in sorted(self._pending_replies):
+            emitted = self._flush_reply(index)
+            if emitted is not None:
+                events.append(emitted)
         self.result.malformed = self._json.malformed
         return events
 
@@ -102,11 +118,36 @@ class SemanticEventParser:
         for event in parse_events:
             if isinstance(event, StringDelta):
                 mapped = self._map_delta(event)
+            elif isinstance(event, ContainerDone):
+                mapped = self._map_container(event)
             else:
                 mapped = self._map_done(event)
             if mapped is not None:
                 out.append(mapped)
         return out
+
+    def _map_container(self, event: ContainerDone) -> SemanticEvent | None:
+        """Một reply dạng object đã đủ cả `text` lẫn `purpose`."""
+        path = event.path
+        if len(path) == 2 and path[0] in _REPLY_KEYS and isinstance(path[1], int):
+            return self._flush_reply(path[1])
+        return None
+
+    def _flush_reply(self, index: int) -> SemanticEvent | None:
+        fields = self._pending_replies.pop(index, None)
+        if fields is None or index in self._emitted_replies:
+            return None
+        text = fields.get("text", "").strip()
+        if not text:
+            return None
+        self._emitted_replies.add(index)
+        self._store_reply(index, text)
+        return ReplyReady(index=index, text=text, purpose=fields.get("purpose", "").strip())
+
+    def _store_reply(self, index: int, text: str) -> None:
+        while len(self.result.replies) <= index:
+            self.result.replies.append("")
+        self.result.replies[index] = text
 
     def _map_delta(self, event: StringDelta) -> SemanticEvent | None:
         # Chỉ translation cần streaming theo ký tự: đó là thứ người dùng đọc
@@ -141,26 +182,26 @@ class SemanticEventParser:
         return None
 
     def _map_reply(self, path, value) -> SemanticEvent | None:
-        # ("replies", 0)            -> mảng chuỗi (đúng schema §4.4)
-        # ("replies", 0, "text")    -> mảng object (model dùng lại schema v1)
+        # ("replies", 0)                -> mảng chuỗi: phát ngay
+        # ("replies", 0, "text")        -> mảng object: gom, chờ ContainerDone
+        # ("replies", 0, "purpose")     -> lý do nên chọn câu này
         if len(path) == 2 and isinstance(path[1], int):
             index = path[1]
-        elif len(path) == 3 and isinstance(path[1], int) and path[2] == "text":
-            index = path[1]
-        else:
+            if index in self._emitted_replies:
+                return None
+            text = str(value).strip()
+            if not text:
+                return None
+            self._emitted_replies.add(index)
+            self._store_reply(index, text)
+            return ReplyReady(index=index, text=text)
+
+        if len(path) == 3 and isinstance(path[1], int) and path[2] in ("text", "purpose"):
+            # Gom lại, chỉ phát khi object đóng — lúc đó mới đủ cả hai trường.
+            self._pending_replies.setdefault(path[1], {})[str(path[2])] = str(value)
             return None
 
-        if index in self._emitted_replies:
-            return None
-        text = str(value).strip()
-        if not text:
-            return None
-
-        self._emitted_replies.add(index)
-        while len(self.result.replies) <= index:
-            self.result.replies.append("")
-        self.result.replies[index] = text
-        return ReplyReady(index=index, text=text)
+        return None
 
 
 async def parse_stream(tokens: AsyncIterator[str]) -> AsyncIterator[SemanticEvent]:

@@ -65,7 +65,7 @@ File được phát qua **đúng đường mà micro đi** — cùng resample v�
 chunk 100ms, cùng WebSocket — nên nó kiểm chứng pipeline thật, không phải
 đường tắt.
 
-#### Chế độ "từng câu một" (bật mặc định)
+#### Chế độ "nghe lại từng câu" (bật mặc định)
 
 Với file có nhiều câu, phát liên tục sẽ khiến câu sau đến khi câu trước còn
 đang xử lý — backend hủy utterance cũ để nhường utterance mới, và kết quả trên
@@ -82,8 +82,39 @@ sau khi câu đó xử lý xong hoàn toàn — nghĩa là LLM sinh xong **và**
 lượt TTS nào đang đọc. Chờ mỗi `copilot_done` là chưa đủ: một bản dịch nhiều
 câu sẽ có nhiều lượt `tts_started`/`tts_done`.
 
-Nút **"Tạm dừng"** cho bạn kiểm soát tay bất cứ lúc nào. Bấm "Tiếp tục" sẽ bỏ
-qua việc chờ backend.
+Với mỗi câu, hệ thống phát lại **bốn bước theo thứ tự**:
+
+| | Nghe gì | Giọng |
+|---|---|---|
+| 1 | **Âm thanh gốc** — cắt đúng đoạn của câu đó từ chính file bạn chọn | (file gốc) |
+| 2 | **Bản dịch** | tiếng Việt |
+| 3 | **Hàm ý** | tiếng Việt |
+| 4 | **Gợi ý trả lời**: *"Có hai lựa chọn cho bạn. Một là: … Mục đích là … Hai là: …"* | xen kẽ |
+
+Bước 4 đổi giọng theo từng đoạn: khung dẫn và mục đích đọc giọng Việt, còn câu
+gợi ý đọc giọng **Anh** — đó là ngôn ngữ bạn sẽ nói ra. Một giọng đọc cả hai
+thì phần tiếng Anh nghe rất khó hiểu.
+
+Client cắt được đúng đoạn audio gốc nhờ trường `start_s` trong `stt_final`:
+server đếm vị trí câu trên chính dòng byte mà client gửi, nên hai bên khớp
+tuyệt đối. Đo trên file 3 câu: `start_s` = 0.416 / 3.552 / 7.104s, khớp đúng
+cách ghép file (0.4 / 3.5 / 7.0s).
+
+Ở chế độ này client đặt server sang **`set_tts_mode: manual`** — server không
+tự đọc gì, client quyết thứ tự. Nếu để server tự đọc theo §2.4.1 thì bản dịch
+sẽ phát *trước cả* âm thanh gốc, vì streaming TTS bắt đầu ngay khi có câu đầu.
+
+Nút **"Tạm dừng"** cho bạn kiểm soát tay bất cứ lúc nào. Bấm "Tiếp tục" sẽ hủy
+chuỗi nghe lại đang dở và phát tiếp ngay.
+
+Thời lượng thực tế mỗi câu: khoảng **20 giây** (3s bản dịch + 2s hàm ý + 14s
+gợi ý trả lời qua 5 đoạn TTS).
+
+> **Chi phí của trường "mục đích".** §4.4 của đặc tả cố ý bỏ trường mô tả cho
+> từng reply vì token thêm làm tăng latency. Đo lại trên Gemma 3 4B / M4:
+> first-useful-result 198ms → 282ms, tổng thời gian sinh 1759ms → 2972ms
+> (+69%). Tắt bằng `llm.reply_purpose: false` nếu ưu tiên tốc độ cho hội thoại
+> trực tiếp.
 
 Tạm dừng an toàn nhờ một tính chất của kiến trúc: **VAD phía server chạy theo
 frame, không theo đồng hồ thực**. Ngừng gửi audio thì trạng thái VAD đóng băng

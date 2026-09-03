@@ -20,28 +20,79 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a real-time copilot for a user wearing earbuds.
+_BASE_RULES = """You are a real-time copilot for a user wearing earbuds.
 Someone is speaking TO the user in a foreign language. Help the user understand
 what was said, and give the user something to say back.
 
 Output ONE compact JSON object and nothing else. No markdown, no code fence.
-{"translation":"...","intent":"...","replies":["...","..."]}
+{schema}
 
 LANGUAGE RULES — these matter more than anything else:
 - "translation": the speech rendered in VIETNAMESE. Every word Vietnamese with
   proper diacritics. Never leave words in the source language. Never use
   Chinese characters.
 - "intent": what the speaker actually wants, in VIETNAMESE, under 10 words.
-- "replies": what the USER SAYS BACK to the speaker. The speaker does not
-  understand Vietnamese, so replies MUST be in the SAME LANGUAGE THE SPEAKER
-  USED — English speech gets English replies, Japanese gets Japanese. Write
-  replies in Vietnamese ONLY if the speaker spoke Vietnamese.
+- reply text: what the USER SAYS BACK to the speaker. The speaker does not
+  understand Vietnamese, so it MUST be in the SAME LANGUAGE THE SPEAKER USED —
+  English speech gets English replies, Japanese gets Japanese. Vietnamese ONLY
+  if the speaker spoke Vietnamese.
   Exactly 2 replies, each under 15 words, meaningfully different.
-
+{purpose_rule}
 Example — the speaker said, in English: "We need more time."
-{"translation":"Chúng tôi cần thêm thời gian.","intent":"Muốn xin gia hạn thêm thời gian.","replies":["How much more time do you need?","That's fine, take the time you need."]}
+{example}
 
 Output the JSON immediately. Do not explain."""
+
+_PLAIN_SCHEMA = '{"translation":"...","intent":"...","replies":["...","..."]}'
+_PLAIN_EXAMPLE = (
+    '{"translation":"Chúng tôi cần thêm thời gian.",'
+    '"intent":"Muốn xin gia hạn thêm thời gian.",'
+    '"replies":["How much more time do you need?",'
+    '"That\'s fine, take the time you need."]}'
+)
+
+_PURPOSE_SCHEMA = (
+    '{"translation":"...","intent":"...",'
+    '"replies":[{"text":"...","purpose":"..."},{"text":"...","purpose":"..."}]}'
+)
+_PURPOSE_RULE = """- "purpose": why the user would pick THIS reply — what it achieves in the
+  conversation. ALWAYS VIETNAMESE, under 12 words. Write "purpose" in
+  Vietnamese even though the reply next to it is English or Japanese — the
+  reply is for the speaker, the purpose is for the user. Two replies must have
+  clearly different purposes, not two wordings of the same move.
+"""
+_PURPOSE_EXAMPLE = (
+    '{"translation":"Chúng tôi cần thêm thời gian.",'
+    '"intent":"Muốn xin gia hạn thêm thời gian.",'
+    '"replies":[{"text":"How much more time do you need?",'
+    '"purpose":"Ép đối phương chốt một mốc cụ thể"},'
+    '{"text":"That\'s fine, take the time you need.",'
+    '"purpose":"Nhượng bộ để giữ quan hệ tốt"}]}'
+)
+
+
+def system_prompt(with_purpose: bool = True) -> str:
+    """Prompt hệ thống. `with_purpose` thêm lý do nên chọn cho từng reply.
+
+    §4.4 cố ý bỏ trường mô tả cho từng reply vì token thêm làm tăng latency.
+    `purpose` khác `meaning` của v1 (bản dịch reply) — nó nói MỤC ĐÍCH khi chọn
+    câu đó.
+
+    Không miễn phí: prompt dài thêm ~360 ký tự nên first-useful-result tăng
+    198ms -> 282ms và tổng thời gian sinh tăng 69% (đo trên Gemma 3 4B / M4).
+    Tắt được qua `llm.reply_purpose`.
+    """
+    if with_purpose:
+        return _BASE_RULES.format(
+            schema=_PURPOSE_SCHEMA, purpose_rule=_PURPOSE_RULE, example=_PURPOSE_EXAMPLE
+        )
+    return _BASE_RULES.format(
+        schema=_PLAIN_SCHEMA, purpose_rule="", example=_PLAIN_EXAMPLE
+    )
+
+
+#: Giữ tên cũ cho test và mã gọi sẵn có.
+SYSTEM_PROMPT = system_prompt(with_purpose=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -128,11 +179,15 @@ def resolve_template(config) -> PromptTemplate:
 
 
 def build_prompt(
-    text: str, language: str | None, template: PromptTemplate = CHATML
+    text: str,
+    language: str | None,
+    template: PromptTemplate = CHATML,
+    *,
+    with_purpose: bool = False,
 ) -> str:
     lang = language or "unknown"
     user = f'Language: {lang}\nSpeech: "{text}"'
-    return template.render(SYSTEM_PROMPT, user)
+    return template.render(system_prompt(with_purpose), user)
 
 
 @dataclass
@@ -161,7 +216,10 @@ class LlmClient:
 
     def build_prompt(self, text: str, language: str | None) -> str:
         """Prompt đúng định dạng của model đang nạp."""
-        return build_prompt(text, language, self.template)
+        return build_prompt(
+            text, language, self.template,
+            with_purpose=self._config.llm.reply_purpose,
+        )
 
     async def start(self) -> None:
         if self._client is None:

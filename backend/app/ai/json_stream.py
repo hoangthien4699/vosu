@@ -52,7 +52,20 @@ class ValueDone:
     value: Any
 
 
-ParseEvent = StringDelta | ValueDone
+@dataclass(frozen=True)
+class ContainerDone:
+    """Một object/array đã đóng.
+
+    Cần vì có trường chỉ dùng được khi biết cả nhóm đã đủ — ví dụ một reply
+    gồm `text` và `purpose`: phát sự kiện ngay lúc thấy `text` thì `purpose`
+    chưa tới, mà phát hai lần thì client phải tự gộp.
+    """
+
+    path: Path
+    kind: str  # "object" | "array"
+
+
+ParseEvent = StringDelta | ValueDone | ContainerDone
 
 
 class _S(Enum):
@@ -324,7 +337,12 @@ class IncrementalJsonParser:
         if not self._stack:
             self._state = _S.DONE
             return
+        closed = self._stack[-1]
+        path = self._path()
         self._stack.pop()
+        if self._stack:
+            # path của container vừa đóng, nhìn từ cha của nó
+            yield ContainerDone(path[:-1] if len(path) > 1 else path, closed.kind)
         if not self._stack:
             self._state = _S.DONE
         else:

@@ -47,6 +47,11 @@ class _TtsItem:
     text: str = ""
     field: str = "translation"
     is_end: bool = False
+    #: Do client yêu cầu tường minh. Được đọc kể cả khi utterance đã kết thúc —
+    #: §2.4.1 quy định quick reply CHỈ đọc khi người dùng chọn thủ công, mà
+    #: lúc đó pipeline đã xong từ lâu.
+    manual: bool = False
+    voice: str | None = None
 
 
 @router.websocket("/ws/copilot")
@@ -122,6 +127,9 @@ class CopilotSession:
         self._audio_started = False
         self._dropped_audio_chunks = 0
         self._tts_available = config.tts.enabled
+        #: "auto" = server tự đọc theo §2.4.1. "manual" = client tự điều phối
+        #: thứ tự đọc (chế độ nghe lại từng câu).
+        self._tts_mode = "auto"
 
     # ------------------------------------------------------------------ #
 
@@ -323,6 +331,9 @@ class CopilotSession:
                 "language": transcript.language,
                 "duration_s": round(transcript.audio_s, 3),
                 "latency_ms": round(transcript.latency_ms, 2),
+                # Vị trí câu trong dòng byte audio — client đếm cùng dòng đó
+                # nên cắt lại được đúng đoạn audio GỐC để nghe đối chiếu.
+                "start_s": round(max(0.0, segment.start_s), 3),
             },
         )
 
@@ -404,13 +415,19 @@ class CopilotSession:
             await self.bus.emit(
                 EventType.REPLY_READY,
                 utterance_id=utterance_id,
-                data={"index": event.index, "text": event.text},
+                data={
+                    "index": event.index,
+                    "text": event.text,
+                    "purpose": event.purpose,
+                },
             )
 
     # -- TTS -------------------------------------------------------------- #
 
     def _should_speak(self, field: str) -> bool:
         if self.tts is None or not self._tts_available:
+            return False
+        if self._tts_mode == "manual":
             return False
         cfg = self.config.tts
         return {
@@ -419,7 +436,15 @@ class CopilotSession:
             "reply": cfg.auto_read_replies,
         }.get(field, False)
 
-    def _speak(self, utterance_id: str, text: str, *, field: str) -> None:
+    def _speak(
+        self,
+        utterance_id: str,
+        text: str,
+        *,
+        field: str,
+        manual: bool = False,
+        voice: str | None = None,
+    ) -> None:
         """Xếp một đoạn vào hàng đợi đọc. KHÔNG chờ đọc xong.
 
         Worker phát tuần tự nên giọng không chồng lên nhau, nhưng vòng lặp
@@ -429,7 +454,9 @@ class CopilotSession:
             return
         if not text.strip():
             return
-        self._tts_queue.put_nowait(_TtsItem(utterance_id, text, field))
+        self._tts_queue.put_nowait(
+            _TtsItem(utterance_id, text, field, manual=manual, voice=voice)
+        )
 
     def _mark_speech_end(self, utterance_id: str) -> None:
         if self.tts is None or not self._tts_available:
@@ -445,7 +472,11 @@ class CopilotSession:
                     return
 
                 utterance = self.state.get(item.utterance_id)
-                if utterance is None or utterance.is_terminal:
+                if utterance is None:
+                    continue
+                # Yêu cầu thủ công vẫn đọc được sau khi utterance đã kết thúc —
+                # đó chính là lúc người dùng bấm chọn một gợi ý trả lời.
+                if utterance.is_terminal and not item.manual:
                     continue
 
                 if item.is_end:
@@ -458,7 +489,7 @@ class CopilotSession:
                     self.state.transition(item.utterance_id, UtteranceState.SPEAKING)
 
                 self._tts_current = asyncio.create_task(
-                    self._run_tts(item.utterance_id, item.text, item.field)
+                    self._run_tts(item.utterance_id, item.text, item.field, item.voice)
                 )
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._tts_current
@@ -477,9 +508,11 @@ class CopilotSession:
             if item is not None and not item.is_end:
                 dropped += 1
 
-    async def _run_tts(self, utterance_id: str, text: str, field: str) -> None:
+    async def _run_tts(
+        self, utterance_id: str, text: str, field: str, voice: str | None = None
+    ) -> None:
         assert self.tts is not None
-        voice = self.config.tts.voice
+        voice = voice or self.config.tts.voice
         chunks = 0
         try:
             self.tts.preflight(voice)
@@ -565,6 +598,25 @@ class CopilotSession:
                 )
             return
 
+        if control.action == "set_tts_mode":
+            self._tts_mode = control.mode or "auto"
+            logger.info("%s: chế độ TTS -> %s", self.session_id, self._tts_mode)
+            return
+
+        if control.action == "speak":
+            # Client tự điều phối thứ tự đọc (chế độ nghe lại từng câu).
+            utterance = self.state.current
+            if utterance is None or self.tts is None or not control.text:
+                return
+            self._speak(
+                utterance.id,
+                control.text,
+                field=control.field or "reply",
+                manual=True,
+                voice=control.voice,
+            )
+            return
+
         if control.action == "speak_reply":
             # §2.4.1 MVP scope: quick reply CHỈ đọc khi người dùng chọn thủ công.
             utterance = self.state.current
@@ -574,7 +626,7 @@ class CopilotSession:
             if text is None and control.reply_index is not None:
                 return  # danh sách reply do client giữ; yêu cầu gửi kèm text
             if text:
-                self._speak(utterance.id, text, field="reply")
+                self._speak(utterance.id, text, field="reply", manual=True)
             return
 
         if control.action == "reset":

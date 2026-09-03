@@ -122,6 +122,21 @@ class LlmConfig:
     # Với model không dùng SWA (Qwen) cờ này là no-op. Chi phí bộ nhớ ở
     # n_ctx=2048 đo được là không đáng kể (2780 so với 2790 MB).
     swa_full: bool = True
+    # Sinh kèm "mục đích" cho từng gợi ý trả lời.
+    #
+    # §4.4 cố ý bỏ trường mô tả cho từng reply vì token thêm làm tăng latency.
+    # Cái này khác `meaning` của v1 (bản dịch reply) — nó nói MỤC ĐÍCH khi chọn
+    # câu đó, dùng cho chế độ nghe lại từng câu.
+    #
+    # Chi phí đo được (Gemma 3 4B, M4):
+    #   first useful result   198ms -> 282ms   (+84ms)
+    #   bản dịch hoàn tất     974ms -> 1098ms  (+124ms)
+    #   tổng thời gian sinh  1759ms -> 2972ms  (+69%)
+    #
+    # `purpose` nằm cuối JSON nhưng KHÔNG miễn phí với đường tới hạn: prompt hệ
+    # thống dài thêm ~360 ký tự, và chi phí đó trả ngay từ token đầu tiên.
+    # Tắt đi nếu cần tối đa tốc độ cho hội thoại trực tiếp.
+    reply_purpose: bool = True
     extra_args: list[str] = field(default_factory=list)
 
     @property
