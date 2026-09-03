@@ -71,6 +71,8 @@ class ModelRuntime:
         self._active_jobs = 0
         self._jobs_idle = asyncio.Event()
         self._jobs_idle.set()
+        self._idle_task: asyncio.Task | None = None
+        self._last_activity = time.monotonic()
 
     # -- trạng thái ------------------------------------------------------- #
 
@@ -123,12 +125,71 @@ class ModelRuntime:
                 snapshot.describe(),
             )
 
+        self._touch()
+        self._start_idle_watchdog()
+
+    def _touch(self) -> None:
+        self._last_activity = time.monotonic()
+
+    def _start_idle_watchdog(self) -> None:
+        timeout = self._config.session.idle_timeout_s
+        if timeout <= 0 or self._idle_task is not None:
+            return
+        self._idle_task = asyncio.create_task(self._idle_watchdog(), name="idle-watchdog")
+
+    async def _idle_watchdog(self) -> None:
+        """Giải phóng VRAM sau `idle_timeout_s` không có hoạt động (§8, Task I3).
+
+        Chỉ hạ model khi KHÔNG còn session VÀ KHÔNG còn inference job — cùng
+        contract với shutdown(). Model được nạp lại tự động ở lần acquire kế
+        tiếp, đổi lại là một lần cold start.
+        """
+        timeout = self._config.session.idle_timeout_s
+        try:
+            while True:
+                # Nhịp kiểm tra tỷ lệ theo timeout, chặn trên 15s: timeout
+                # 180s -> kiểm mỗi 15s; timeout ngắn -> phản ứng nhanh tương ứng.
+                await asyncio.sleep(min(15.0, max(0.05, timeout / 4)))
+                if not self._ready or self._active_sessions or self._active_jobs:
+                    continue
+                idle_for = time.monotonic() - self._last_activity
+                if idle_for < timeout:
+                    continue
+                logger.info(
+                    "Không hoạt động %.0fs — giải phóng VRAM (sẽ nạp lại khi có audio mới).",
+                    idle_for,
+                )
+                await self._release_models()
+        except asyncio.CancelledError:
+            raise
+
+    async def _release_models(self) -> None:
+        async with self._lock:
+            if not self._ready or self._active_sessions or self._active_jobs:
+                return
+            self._ready = False
+            await self.llm.close()
+            await self.llama.stop()
+            self.stt.unload()
+            self.stats.notes.append(f"idle unload lúc {time.monotonic():.0f}")
+
+    async def ensure_ready(self) -> None:
+        """Nạp lại model nếu đã bị idle timeout thu hồi."""
+        if not self._ready:
+            await self.start()
+
     async def shutdown(self, *, drain_timeout: float = 30.0) -> None:
         """Dừng runtime. CHỜ mọi inference job xong trước khi hạ model.
 
         Đây là chỗ contract của §3.1 được thực thi. Hạ model trong lúc còn job
         đang chạy sẽ gây segfault trong CTranslate2 hoặc trả về kết quả rác.
         """
+        if self._idle_task is not None:
+            self._idle_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._idle_task
+            self._idle_task = None
+
         if self._active_jobs:
             logger.info("Chờ %d inference job hoàn tất trước khi hạ model...", self._active_jobs)
             try:
@@ -156,6 +217,8 @@ class ModelRuntime:
     @contextlib.asynccontextmanager
     async def session(self, session_id: str) -> AsyncIterator[ModelRuntime]:
         """Đăng ký một session. KHÔNG hạ model khi thoát."""
+        # Idle timeout có thể đã thu hồi model — nạp lại trước khi nhận session.
+        await self.ensure_ready()
         async with self._lock:
             limit = self._config.session.max_concurrent_sessions
             if len(self._active_sessions) >= limit:
@@ -165,6 +228,7 @@ class ModelRuntime:
                 )
             self._active_sessions.add(session_id)
             self.stats.sessions_served += 1
+            self._touch()
 
         logger.info("Session %s bắt đầu (%d đang hoạt động)", session_id, self.active_sessions)
         try:
@@ -172,6 +236,7 @@ class ModelRuntime:
         finally:
             async with self._lock:
                 self._active_sessions.discard(session_id)
+                self._touch()
             logger.info(
                 "Session %s kết thúc (%d đang hoạt động, %d job còn chạy)",
                 session_id, self.active_sessions, self._active_jobs,
@@ -185,6 +250,7 @@ class ModelRuntime:
         """
         self._active_jobs += 1
         self._jobs_idle.clear()
+        self._touch()
         self.stats.inference_jobs += 1
         self.stats.peak_concurrent_jobs = max(
             self.stats.peak_concurrent_jobs, self._active_jobs
@@ -193,6 +259,7 @@ class ModelRuntime:
             yield
         finally:
             self._active_jobs -= 1
+            self._touch()
             if self._active_jobs <= 0:
                 self._active_jobs = 0
                 self._jobs_idle.set()
@@ -206,6 +273,8 @@ class ModelRuntime:
             "stt_loaded": self.stt.is_loaded,
             "active_sessions": self.active_sessions,
             "active_jobs": self._active_jobs,
+            "idle_for_s": round(time.monotonic() - self._last_activity, 1),
+            "idle_timeout_s": self._config.session.idle_timeout_s,
             "vram": {
                 "available": snapshot.available,
                 "used_gb": round(snapshot.used_gb, 3),

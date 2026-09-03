@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 là bản tối thiểu khai báo trong pyproject; 3.11 là bản khuyến nghị.
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Cài dependency
+        # Cố ý KHÔNG cài faster-whisper/model: bộ test phải chạy được mà không
+        # cần GPU hay 2GB model. VAD có backend energy thay thế, STT/LLM/TTS
+        # đều có bản giả lập. Nếu phải tải model mới chạy được test thì CI sẽ
+        # chậm tới mức không ai để ý khi nó đỏ.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements/base.txt -r requirements/dev.txt
+
+      - name: Lint
+        run: ruff check backend benchmarks tests
+
+      - name: Test
+        run: pytest -q
+
+      - name: Kiểm tra import trên cả hai device profile
+        run: |
+          python - <<'PY'
+          import sys; sys.path.insert(0, "backend")
+          from app.core.config import load_config
+
+          for platform, expected_ngl, expected_stt in [
+              ("cuda", 36, "cuda"), ("macos", 99, "cpu"), ("cpu", 0, "cpu"),
+          ]:
+              cfg = load_config(env={"VOSU_PLATFORM": platform})
+              assert cfg.llm_gpu_layers == expected_ngl, platform
+              assert cfg.device.stt_device == expected_stt, platform
+              print(f"{platform}: ngl={cfg.llm_gpu_layers} stt={cfg.device.stt_device} OK")
+          PY
+
+      - name: Kiểm tra script shell
+        run: bash -n scripts/*.sh
+
+      - name: Benchmark phải SKIP sạch khi thiếu model
+        # Bắt lỗi kiểu "benchmark nổ vì thiếu dependency" — chúng phải báo
+        # SKIP kèm lý do hành động được, không được ném traceback.
+        run: |
+          python -m benchmarks.run_gate --skip-interactive --no-save || true
+          test -f benchmarks/results/gate_report.txt
+          grep -q "KẾT LUẬN GATE" benchmarks/results/gate_report.txt

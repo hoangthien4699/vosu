@@ -24,7 +24,10 @@ def runtime(monkeypatch):
     monkeypatch.setattr(rt.llm, "close", noop)
     monkeypatch.setattr(rt.stt, "load", noop)
     monkeypatch.setattr(rt.stt, "unload", lambda: None)
-    return rt
+    yield rt
+    # Hạ watchdog kể cả khi test fail giữa chừng, tránh task treo lơ lửng.
+    if rt._idle_task is not None:
+        rt._idle_task.cancel()
 
 
 async def test_session_ngat_ket_noi_khong_ha_model(runtime):
@@ -118,4 +121,51 @@ async def test_dem_job_dong_thoi_dat_dinh(runtime):
     await asyncio.gather(*(job() for _ in range(4)))
     assert runtime.stats.peak_concurrent_jobs == 4
     assert runtime.active_jobs == 0
+    await runtime.shutdown()
+
+
+async def test_idle_timeout_giai_phong_vram_va_nap_lai_duoc(runtime):
+    """§8 Giai đoạn 4 / Task I3 — không nói 3 phút thì trả VRAM về 0."""
+    runtime._config.session.idle_timeout_s = 0.15
+    await runtime.start()
+    assert runtime.is_ready
+
+    await asyncio.sleep(0.6)
+    assert not runtime.is_ready, "idle watchdog không thu hồi model"
+
+    # Kết nối mới phải tự nạp lại, không cần khởi động lại server
+    async with runtime.session("sess_a"):
+        assert runtime.is_ready, "model không được nạp lại khi có session mới"
+    await runtime.shutdown()
+
+
+async def test_idle_timeout_khong_ha_model_khi_con_session(runtime):
+    runtime._config.session.idle_timeout_s = 0.15
+    await runtime.start()
+    async with runtime.session("sess_a"):
+        await asyncio.sleep(0.6)
+        assert runtime.is_ready, "hạ model trong lúc session còn mở"
+    await runtime.shutdown()
+
+
+async def test_idle_timeout_khong_ha_model_khi_con_job(runtime):
+    runtime._config.session.idle_timeout_s = 0.15
+    await runtime.start()
+
+    async def slow_job():
+        async with runtime.job():
+            await asyncio.sleep(0.6)
+
+    task = asyncio.create_task(slow_job())
+    await asyncio.sleep(0.45)
+    assert runtime.is_ready, "hạ model trong lúc inference job còn chạy"
+    await task
+    await runtime.shutdown()
+
+
+async def test_idle_timeout_tat_khi_dat_0(runtime):
+    runtime._config.session.idle_timeout_s = 0
+    await runtime.start()
+    await asyncio.sleep(0.3)
+    assert runtime.is_ready
     await runtime.shutdown()
