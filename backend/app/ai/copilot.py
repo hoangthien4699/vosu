@@ -21,6 +21,7 @@ overload — giọng AI chồng lấp lên hội thoại thật đang diễn ra.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 
@@ -33,6 +34,31 @@ from .json_stream import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Rác cấu trúc JSON lọt vào CUỐI một giá trị chuỗi.
+#
+# Sinh có grammar đảm bảo cấu trúc đúng, nhưng `{`, `}`, `[`, `]` là ký tự hợp
+# lệ BÊN TRONG chuỗi JSON nên grammar không cấm được. Quan sát thật với
+# Gemma 3 4B: model muốn đóng object và mở object mới, nhưng token nó chọn đặt
+# `},{` vào trong chuỗi trước rồi mới đóng:
+#
+#     "meaning":"Được rồi, chúng ta tạm dừng lại đây.},{"
+#
+# JSON vẫn hợp lệ, chỉ là người dùng đọc thấy rác. Đã thử cấm bằng `pattern`
+# trong JSON Schema — llama.cpp bỏ qua.
+_TRAILING_JSON_NOISE = re.compile(r'[\s]*[}\]][\s,{\[\]"]*$')
+
+
+def clean_value(text: str) -> str:
+    """Cắt rác cấu trúc ở cuối một giá trị chuỗi do model sinh ra.
+
+    Cố ý hẹp: chỉ cắt khi phần đuôi CÓ dấu đóng `}` hoặc `]`. Một câu tiếng
+    Việt không bao giờ kết thúc bằng những ký tự đó, còn dấu ngoặc kép hay dấu
+    phẩy đứng một mình thì để nguyên.
+    """
+    cleaned = _TRAILING_JSON_NOISE.sub("", text)
+    return cleaned if cleaned.strip() else text
+
 
 #: Model đôi khi lờ prompt và dùng tên trường của baseline v1.
 _TRANSLATION_KEYS = {"translation", "trans"}
@@ -55,8 +81,9 @@ class IntentDone:
 class ReplyReady:
     index: int
     text: str
-    #: Vì sao người dùng có thể chọn câu này. Rỗng nếu model không sinh ra.
-    purpose: str = ""
+    #: Bản dịch tiếng Việt của `text` — để người dùng biết mình sắp nói gì.
+    #: Rỗng nếu model không sinh ra hoặc `llm.reply_meaning` đang tắt.
+    meaning: str = ""
 
 
 SemanticEvent = TranslationDelta | IntentDone | ReplyReady
@@ -90,7 +117,7 @@ class SemanticEventParser:
         self.result = CopilotResult()
         self._emitted_replies: set[int] = set()
         self._intent_emitted = False
-        #: reply đang gom dở: index -> {"text": ..., "purpose": ...}
+        #: reply đang gom dở: index -> {"text": ..., "meaning": ...}
         self._pending_replies: dict[int, dict[str, str]] = {}
 
     @property
@@ -137,12 +164,15 @@ class SemanticEventParser:
         fields = self._pending_replies.pop(index, None)
         if fields is None or index in self._emitted_replies:
             return None
-        text = fields.get("text", "").strip()
+        text = clean_value(fields.get("text", "")).strip()
         if not text:
             return None
         self._emitted_replies.add(index)
         self._store_reply(index, text)
-        return ReplyReady(index=index, text=text, purpose=fields.get("purpose", "").strip())
+        # Chấp nhận cả `purpose`: model đôi khi bám theo từ khóa cũ nếu prompt
+        # được sửa mà cache prompt phía server chưa kịp đổi.
+        meaning = clean_value(fields.get("meaning") or fields.get("purpose") or "").strip()
+        return ReplyReady(index=index, text=text, meaning=meaning)
 
     def _store_reply(self, index: int, text: str) -> None:
         while len(self.result.replies) <= index:
@@ -165,13 +195,18 @@ class SemanticEventParser:
         head = path[0]
 
         if len(path) == 1 and head in _TRANSLATION_KEYS:
-            # ValueDone của translation: nội dung đã được ghép dần qua delta.
-            # Ghi đè để phòng trường hợp finish() phát giá trị đầy đủ.
-            self.result.translation = str(event.value)
+            # Nội dung đã ghép dần qua delta. Nếu việc dọn rác làm đổi kết quả
+            # thì phát thêm một delta sửa lại — nếu không, UI sẽ giữ nguyên
+            # phần rác đã hiện ra.
+            cleaned = clean_value(str(event.value))
+            changed = cleaned != self.result.translation
+            self.result.translation = cleaned
+            if changed:
+                return TranslationDelta(text="", full=cleaned)
             return None
 
         if len(path) == 1 and head in _INTENT_KEYS and not self._intent_emitted:
-            intent = str(event.value).strip()
+            intent = clean_value(str(event.value)).strip()
             self.result.intent = intent
             self._intent_emitted = True
             return IntentDone(intent=intent)
@@ -184,19 +219,19 @@ class SemanticEventParser:
     def _map_reply(self, path, value) -> SemanticEvent | None:
         # ("replies", 0)                -> mảng chuỗi: phát ngay
         # ("replies", 0, "text")        -> mảng object: gom, chờ ContainerDone
-        # ("replies", 0, "purpose")     -> lý do nên chọn câu này
+        # ("replies", 0, "meaning")     -> bản dịch tiếng Việt của câu đó
         if len(path) == 2 and isinstance(path[1], int):
             index = path[1]
             if index in self._emitted_replies:
                 return None
-            text = str(value).strip()
+            text = clean_value(str(value)).strip()
             if not text:
                 return None
             self._emitted_replies.add(index)
             self._store_reply(index, text)
             return ReplyReady(index=index, text=text)
 
-        if len(path) == 3 and isinstance(path[1], int) and path[2] in ("text", "purpose"):
+        if len(path) == 3 and isinstance(path[1], int) and path[2] in ("text", "meaning", "purpose"):
             # Gom lại, chỉ phát khi object đóng — lúc đó mới đủ cả hai trường.
             self._pending_replies.setdefault(path[1], {})[str(path[2])] = str(value)
             return None

@@ -122,21 +122,25 @@ class LlmConfig:
     # Với model không dùng SWA (Qwen) cờ này là no-op. Chi phí bộ nhớ ở
     # n_ctx=2048 đo được là không đáng kể (2780 so với 2790 MB).
     swa_full: bool = True
-    # Sinh kèm "mục đích" cho từng gợi ý trả lời.
+    # Sinh kèm bản dịch tiếng Việt cho từng gợi ý trả lời.
     #
-    # §4.4 cố ý bỏ trường mô tả cho từng reply vì token thêm làm tăng latency.
-    # Cái này khác `meaning` của v1 (bản dịch reply) — nó nói MỤC ĐÍCH khi chọn
-    # câu đó, dùng cho chế độ nghe lại từng câu.
+    # Đây CHÍNH LÀ trường `meaning` mà §4.4 đã bỏ đi: "mỗi reply thêm bản dịch
+    # sẽ làm tăng token → tăng latency". Đưa lại theo yêu cầu sản phẩm — người
+    # dùng là người Việt, câu gợi ý là tiếng Anh; không biết mình sắp nói gì
+    # thì không chọn được.
     #
-    # Chi phí đo được (Gemma 3 4B, M4):
-    #   first useful result   198ms -> 282ms   (+84ms)
-    #   bản dịch hoàn tất     974ms -> 1098ms  (+124ms)
-    #   tổng thời gian sinh  1759ms -> 2972ms  (+69%)
-    #
-    # `purpose` nằm cuối JSON nhưng KHÔNG miễn phí với đường tới hạn: prompt hệ
-    # thống dài thêm ~360 ký tự, và chi phí đó trả ngay từ token đầu tiên.
+    # Chi phí đo được (Gemma 3 4B, M4) — xem README để biết số mới nhất.
+    # `meaning` nằm cuối JSON nhưng KHÔNG miễn phí với đường tới hạn: prompt hệ
+    # thống dài thêm, và chi phí đó trả ngay từ token đầu tiên.
     # Tắt đi nếu cần tối đa tốc độ cho hội thoại trực tiếp.
-    reply_purpose: bool = True
+    reply_meaning: bool = True
+    # Ràng buộc output bằng JSON Schema (llama.cpp dịch thành GBNF grammar).
+    #
+    # KHÔNG phải tối ưu hóa — là điều kiện để `reply_meaning` chạy được. Không
+    # ràng buộc thì Gemma 3 4B gộp cả hai reply vào một object với khóa trùng
+    # và bọc markdown fence: 0/5 câu ra JSON hợp lệ. Có grammar: 5/5.
+    # Đổi lại tổng thời gian sinh tăng ~26%.
+    json_schema: bool = True
     extra_args: list[str] = field(default_factory=list)
 
     @property

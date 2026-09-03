@@ -418,7 +418,7 @@ class CopilotSession:
                 data={
                     "index": event.index,
                     "text": event.text,
-                    "purpose": event.purpose,
+                    "meaning": event.meaning,
                 },
             )
 
