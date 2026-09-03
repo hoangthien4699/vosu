@@ -6,7 +6,7 @@
  *   G3 — phát TTS, và DỪNG NGAY khi nhận `tts_cancelled` (Barge-in, §2.4.1)
  *
  * Client cố ý KHÔNG biết gì về cấu trúc JSON của LLM. Nó chỉ hiểu các event
- * ngữ nghĩa: translation_delta / intent_done / reply_ready (§4.4).
+ * ngữ nghĩa: translation_delta / reply_ready (§4.4).
  */
 
 const TARGET_SR = 16000;
@@ -17,7 +17,7 @@ const ui = {
   status: el("status"), toggle: el("toggle"), stopTts: el("stopTts"),
   utteranceId: el("utteranceId"), partial: el("partial"), final: el("final"),
   lang: el("lang"), sttLatency: el("sttLatency"),
-  translation: el("translation"), intent: el("intent"), replies: el("replies"),
+  translation: el("translation"), replies: el("replies"),
   log: el("log"), pickFile: el("pickFile"), fileInput: el("fileInput"),
   pauseBtn: el("pauseBtn"), autoPause: el("autoPause"),
   autoPauseWrap: el("autoPauseWrap"), filePanel: el("filePanel"),
@@ -238,7 +238,6 @@ function onEvent(event) {
         durationS: data.duration_s ?? 0,
         source: data.text,
         translation: "",
-        intent: "",
         replies: [],
       };
       beginUtteranceHold();
@@ -248,7 +247,6 @@ function onEvent(event) {
 
     case "copilot_started":
       ui.translation.textContent = "";
-      ui.intent.textContent = "";
       ui.replies.innerHTML = "";
       state.replies = [];
       break;
@@ -259,12 +257,6 @@ function onEvent(event) {
       markUseful();
       break;
 
-    case "intent_done":
-      ui.intent.textContent = data.intent;
-      if (state.utt) state.utt.intent = data.intent;
-      markUseful();
-      log(type, data.intent);
-      break;
 
     case "reply_ready":
       addReply(data.index, data.text, data.meaning || "");
@@ -603,13 +595,6 @@ async function runReview(utt) {
       markStep("translation", "done");
     }
 
-    if (state.review !== utt) return;
-    markStep("intent", utt.intent && canSpeak ? "active" : "skip");
-    if (utt.intent && canSpeak) {
-      ui.fileState.textContent = "nghe lại: hàm ý";
-      await speakAndWait(utt.intent, "intent", "vi");
-      markStep("intent", "done");
-    }
 
     if (state.review !== utt) return;
     const segments = canSpeak ? buildReplySegments(utt.replies) : [];
