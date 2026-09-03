@@ -39,7 +39,6 @@ class EventType(str, Enum):
     # Frontend CHỈ được thấy các event này, không bao giờ thấy JSON thô dở dang
     # đang được LLM sinh.
     TRANSLATION_DELTA = "translation_delta"
-    INTENT_DONE = "intent_done"
     REPLY_READY = "reply_ready"
 
     # --- TTS (§2.4.1) ---
@@ -64,7 +63,6 @@ UTTERANCE_SCOPED = frozenset(
         EventType.COPILOT_STARTED,
         EventType.COPILOT_DONE,
         EventType.TRANSLATION_DELTA,
-        EventType.INTENT_DONE,
         EventType.REPLY_READY,
         EventType.TTS_STARTED,
         EventType.TTS_AUDIO_CHUNK,

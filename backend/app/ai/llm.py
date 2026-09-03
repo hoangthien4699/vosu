@@ -31,7 +31,6 @@ LANGUAGE RULES — these matter more than anything else:
 - "translation": the speech rendered in VIETNAMESE. Every word Vietnamese with
   proper diacritics. Never leave words in the source language. Never use
   Chinese characters.
-- "intent": what the speaker actually wants, in VIETNAMESE, under 10 words.
 - reply text: what the USER SAYS BACK to the speaker. The speaker does not
   understand Vietnamese, so it MUST be in the SAME LANGUAGE THE SPEAKER USED —
   English speech gets English replies, Japanese gets Japanese. Vietnamese ONLY
@@ -43,16 +42,25 @@ Example — the speaker said, in English: "We need more time."
 
 Output the JSON immediately. Do not explain."""
 
-_PLAIN_SCHEMA = '{"translation":"...","intent":"...","replies":["...","..."]}'
+_HISTORY_RULE = """
+Earlier in this conversation (oldest first). "Them" is the speaker, "You" is
+what the user already said back. Use it to resolve pronouns like "it" or "that
+one", to keep the thread, and to avoid suggesting a reply the user already
+used. Only the last line below is being asked about — everything above it is
+context.
+
+{history}
+"""
+
+_PLAIN_SCHEMA = '{"translation":"...","replies":["...","..."]}'
 _PLAIN_EXAMPLE = (
     '{"translation":"Chúng tôi cần thêm thời gian.",'
-    '"intent":"Muốn xin gia hạn thêm thời gian.",'
     '"replies":["How much more time do you need?",'
     '"That\'s fine, take the time you need."]}'
 )
 
 _MEANING_SCHEMA = (
-    '{"translation":"...","intent":"...",'
+    '{"translation":"...",'
     '"replies":[{"text":"...","meaning":"..."},{"text":"...","meaning":"..."}]}'
 )
 _MEANING_RULE = """- "meaning": the Vietnamese translation of "text" right next to it, so the
@@ -62,7 +70,6 @@ _MEANING_RULE = """- "meaning": the Vietnamese translation of "text" right next 
 """
 _MEANING_EXAMPLE = (
     '{"translation":"Chúng tôi cần thêm thời gian.",'
-    '"intent":"Muốn xin gia hạn thêm thời gian.",'
     '"replies":[{"text":"How much more time do you need?",'
     '"meaning":"Anh cần thêm bao nhiêu thời gian nữa?"},'
     '{"text":"That\'s fine, take the time you need.",'
@@ -210,7 +217,6 @@ def response_schema(with_meaning: bool = True) -> dict:
         "type": "object",
         "properties": {
             "translation": {"type": "string"},
-            "intent": {"type": "string"},
             "replies": {
                 "type": "array",
                 "minItems": 2,
@@ -218,7 +224,7 @@ def response_schema(with_meaning: bool = True) -> dict:
                 "items": reply_item,
             },
         },
-        "required": ["translation", "intent", "replies"],
+        "required": ["translation", "replies"],
     }
 
 
@@ -228,10 +234,24 @@ def build_prompt(
     template: PromptTemplate = CHATML,
     *,
     with_meaning: bool = False,
+    history: str = "",
 ) -> str:
+    """Dựng prompt. `history` là các lượt trước, đã render sẵn.
+
+    Thứ tự các phần quyết định hiệu quả prefix cache:
+
+        [system prompt]  [lịch sử]  [câu hiện tại]
+         cố định          chỉ mọc     đổi mỗi lượt
+                          thêm cuối
+
+    Lịch sử chỉ nối thêm ở cuối nên tiền tố của lượt trước vẫn dùng lại được;
+    chỉ phần mới cộng câu hiện tại phải xử lý lại. Đặt lịch sử SAU câu hiện tại
+    hoặc chèn vào giữa system prompt sẽ phá cache và đẩy TTFT lên nhiều lần.
+    """
     lang = language or "unknown"
-    user = f'Language: {lang}\nSpeech: "{text}"'
-    return template.render(system_prompt(with_meaning), user)
+    context = _HISTORY_RULE.format(history=history.strip()) if history.strip() else ""
+    user = f'{context}\nNow they said:\nLanguage: {lang}\nSpeech: "{text}"'
+    return template.render(system_prompt(with_meaning), user.strip())
 
 
 @dataclass
@@ -258,11 +278,14 @@ class LlmClient:
             ", ".join(self.template.stop),
         )
 
-    def build_prompt(self, text: str, language: str | None) -> str:
+    def build_prompt(
+        self, text: str, language: str | None, history: str = ""
+    ) -> str:
         """Prompt đúng định dạng của model đang nạp."""
         return build_prompt(
             text, language, self.template,
             with_meaning=self._config.llm.reply_meaning,
+            history=history,
         )
 
     async def start(self) -> None:

@@ -64,7 +64,6 @@ tts:
   enabled: true
   voice: vi
   auto_read_translation: true
-  auto_read_intent: false
   auto_read_replies: false
   stream_by_sentence: true
   realtime_pacing: true

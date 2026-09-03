@@ -2,16 +2,10 @@ from __future__ import annotations
 
 import json
 
-from app.ai.copilot import (
-    IntentDone,
-    ReplyReady,
-    SemanticEventParser,
-    TranslationDelta,
-)
+from app.ai.copilot import ReplyReady, SemanticEventParser, TranslationDelta
 
 SAMPLE = {
     "translation": "Tôi nghĩ chúng ta nên tạm gác lại cuộc thảo luận này.",
-    "intent": "muốn hoãn thảo luận",
     "replies": ["Understood. When can we revisit?", "Is there a blocker first?"],
 }
 
@@ -25,11 +19,10 @@ def feed_all(text: str, size: int = 3):
     return events, parser
 
 
-def test_sinh_du_ba_loai_semantic_event():
+def test_sinh_du_hai_loai_semantic_event():
     events, parser = feed_all(json.dumps(SAMPLE, ensure_ascii=False))
 
     assert any(isinstance(e, TranslationDelta) for e in events)
-    assert [e.intent for e in events if isinstance(e, IntentDone)] == ["muốn hoãn thảo luận"]
     replies = [(e.index, e.text) for e in events if isinstance(e, ReplyReady)]
     assert replies == [(0, SAMPLE["replies"][0]), (1, SAMPLE["replies"][1])]
     assert parser.result.translation == SAMPLE["translation"]
@@ -52,10 +45,6 @@ def test_translation_delta_cong_don_khop_full():
     assert "".join(e.text for e in deltas) == deltas[-1].full == SAMPLE["translation"]
 
 
-def test_intent_chi_phat_mot_lan():
-    events, _ = feed_all(json.dumps(SAMPLE, ensure_ascii=False), size=1)
-    assert len([e for e in events if isinstance(e, IntentDone)]) == 1
-
 
 def test_reply_khong_bi_lap_khi_finish():
     events, _ = feed_all(json.dumps(SAMPLE, ensure_ascii=False))
@@ -66,13 +55,12 @@ def test_reply_khong_bi_lap_khi_finish():
 def test_chap_nhan_ten_truong_cua_baseline_v1():
     """Model 3B lượng tử hóa hay quay về schema cũ — không được mất dữ liệu."""
     payload = json.dumps(
-        {"trans": "Xin chào", "cultural_intent": "chào hỏi",
+        {"trans": "Xin chào",
          "suggested_replies": [{"tone": "Thân mật", "text": "Hi there!"}]},
         ensure_ascii=False,
     )
     events, parser = feed_all(payload)
     assert parser.result.translation == "Xin chào"
-    assert [e.intent for e in events if isinstance(e, IntentDone)] == ["chào hỏi"]
     assert [e.text for e in events if isinstance(e, ReplyReady)] == ["Hi there!"]
 
 

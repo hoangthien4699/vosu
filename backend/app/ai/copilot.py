@@ -12,10 +12,12 @@
 
 MVP scope đọc tự động (§2.4.1, review v4.1):
     - translation -> AUTO
-    - intent      -> chỉ hiển thị UI, TTS tùy chọn (mặc định tắt)
     - reply       -> chỉ đọc khi người dùng chọn thủ công
 Lý do: người đối diện nói liên tục nhiều câu, đọc hết mọi gợi ý sẽ gây audio
 overload — giọng AI chồng lấp lên hội thoại thật đang diễn ra.
+
+Trường `intent` của §4.4 đã được BỎ theo yêu cầu sản phẩm: người dùng chỉ cần
+bản dịch câu đối phương nói, phần giải thích hàm ý là thừa và tốn token.
 """
 
 from __future__ import annotations
@@ -62,7 +64,6 @@ def clean_value(text: str) -> str:
 
 #: Model đôi khi lờ prompt và dùng tên trường của baseline v1.
 _TRANSLATION_KEYS = {"translation", "trans"}
-_INTENT_KEYS = {"intent", "cultural_intent"}
 _REPLY_KEYS = {"replies", "suggested_replies"}
 
 
@@ -70,11 +71,6 @@ _REPLY_KEYS = {"replies", "suggested_replies"}
 class TranslationDelta:
     text: str
     full: str
-
-
-@dataclass(frozen=True)
-class IntentDone:
-    intent: str
 
 
 @dataclass(frozen=True)
@@ -86,13 +82,12 @@ class ReplyReady:
     meaning: str = ""
 
 
-SemanticEvent = TranslationDelta | IntentDone | ReplyReady
+SemanticEvent = TranslationDelta | ReplyReady
 
 
 @dataclass
 class CopilotResult:
     translation: str = ""
-    intent: str = ""
     replies: list[str] = field(default_factory=list)
     malformed: bool = False
 
@@ -102,7 +97,7 @@ class CopilotResult:
 
         Dùng để chốt mốc "first useful result" khi đo E2E (§7).
         """
-        return bool(self.translation.strip() or self.intent.strip() or self.replies)
+        return bool(self.translation.strip() or self.replies)
 
 
 class SemanticEventParser:
@@ -116,7 +111,6 @@ class SemanticEventParser:
         self._json = IncrementalJsonParser()
         self.result = CopilotResult()
         self._emitted_replies: set[int] = set()
-        self._intent_emitted = False
         #: reply đang gom dở: index -> {"text": ..., "meaning": ...}
         self._pending_replies: dict[int, dict[str, str]] = {}
 
@@ -181,7 +175,7 @@ class SemanticEventParser:
 
     def _map_delta(self, event: StringDelta) -> SemanticEvent | None:
         # Chỉ translation cần streaming theo ký tự: đó là thứ người dùng đọc
-        # (và nghe) sớm nhất. intent/reply chỉ có nghĩa khi đã hoàn chỉnh.
+        # (và nghe) sớm nhất. reply chỉ có nghĩa khi đã hoàn chỉnh.
         if len(event.path) == 1 and event.path[0] in _TRANSLATION_KEYS:
             self.result.translation += event.text
             return TranslationDelta(text=event.text, full=self.result.translation)
@@ -205,11 +199,6 @@ class SemanticEventParser:
                 return TranslationDelta(text="", full=cleaned)
             return None
 
-        if len(path) == 1 and head in _INTENT_KEYS and not self._intent_emitted:
-            intent = clean_value(str(event.value)).strip()
-            self.result.intent = intent
-            self._intent_emitted = True
-            return IntentDone(intent=intent)
 
         if head in _REPLY_KEYS:
             return self._map_reply(path, event.value)

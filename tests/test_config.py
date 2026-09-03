@@ -18,14 +18,14 @@ def test_ep_kieu_dung_cho_moi_kieu_du_lieu():
     cfg = load_config(env={
         "VOSU_LLM__PORT": "9090",              # int
         "VOSU_VAD__THRESHOLD": "0.65",         # float
-        "VOSU_TTS__AUTO_READ_INTENT": "true",  # bool
+        "VOSU_TTS__AUTO_READ_REPLIES": "true",  # bool
         "VOSU_STT__LANGUAGE": "en",            # Optional[str]
         "VOSU_LLM__N_GPU_LAYERS": "20",        # Optional[int]
         "VOSU_LLM__EXTRA_ARGS": "--a,--b",     # list[str]
     })
     assert cfg.llm.port == 9090 and isinstance(cfg.llm.port, int)
     assert cfg.vad.threshold == pytest.approx(0.65)
-    assert cfg.tts.auto_read_intent is True
+    assert cfg.tts.auto_read_replies is True
     assert cfg.stt.language == "en"
     assert cfg.llm.n_gpu_layers == 20
     assert cfg.llm.extra_args == ["--a", "--b"]

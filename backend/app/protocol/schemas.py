@@ -77,10 +77,6 @@ class TranslationDeltaData(_Strict):
     full: str
 
 
-class IntentDoneData(_Strict):
-    intent: str
-
-
 class ReplyReadyData(_Strict):
     index: int = Field(ge=0)
     text: str
@@ -89,7 +85,7 @@ class ReplyReadyData(_Strict):
 
 
 class TtsStartedData(_Strict):
-    utterance_field: Literal["translation", "intent", "reply"]
+    utterance_field: Literal["translation", "reply"]
     text: str
     voice: str
     sample_rate: int
@@ -135,7 +131,6 @@ PAYLOAD_SCHEMAS: dict[EventType, type[BaseModel]] = {
     EventType.COPILOT_STARTED: CopilotStartedData,
     EventType.COPILOT_DONE: CopilotDoneData,
     EventType.TRANSLATION_DELTA: TranslationDeltaData,
-    EventType.INTENT_DONE: IntentDoneData,
     EventType.REPLY_READY: ReplyReadyData,
     EventType.TTS_STARTED: TtsStartedData,
     EventType.TTS_AUDIO_CHUNK: TtsAudioChunkData,
@@ -193,7 +188,6 @@ def validate_event(event: Event) -> dict[str, Any]:
 
 class CopilotOutput(_Strict):
     translation: str = ""
-    intent: str = ""
     replies: list[str] = Field(default_factory=list)
 
 
@@ -207,7 +201,7 @@ class ClientControl(_Strict):
     reply_index: int | None = None
     text: str | None = None
     #: `speak`: đọc phần nào (đổi giọng và gắn nhãn cho đúng)
-    field: Literal["translation", "intent", "reply"] | None = None
+    field: Literal["translation", "reply"] | None = None
     #: `speak`: ép dùng giọng cụ thể ("vi" hoặc "en"). None = theo config.
     voice: Literal["vi", "en"] | None = None
     #: `set_tts_mode`: "auto" = server tự đọc translation (mặc định, §2.4.1);

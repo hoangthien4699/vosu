@@ -58,14 +58,17 @@ llm:
   # Thiếu cờ này, mỗi utterance phải xử lý lại toàn bộ system prompt:
   # 241 token/610ms thay vì 15 token/86ms. No-op với model không dùng SWA.
   swa_full: true
+  # Bộ nhớ hội thoại (§10). 0 = tắt, mỗi câu dịch biệt lập.
+  history_turns: 6
+  history_chars: 1200
   startup_timeout_s: 90.0
 
 tts:
   enabled: true
   voice: vi
-  # §2.4.1 MVP scope — chốt để tránh audio dồn dập chồng lấp hội thoại thật
+  # §2.4.1 MVP scope — chốt để tránh audio dồn dập chồng lấp hội thoại thật.
+  # Trường `intent` của §4.4 đã bỏ: người dùng chỉ cần bản dịch.
   auto_read_translation: true    # AUTO — giá trị cốt lõi khi nghe live
-  auto_read_intent: false        # chỉ hiển thị UI
   auto_read_replies: false       # chỉ đọc khi người dùng bấm chọn
   stream_by_sentence: true
   # Đẩy chunk theo nhịp thời gian thực. Tắt đi thì server dốc hết audio sang

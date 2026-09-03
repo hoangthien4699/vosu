@@ -141,6 +141,16 @@ class LlmConfig:
     # và bọc markdown fence: 0/5 câu ra JSON hợp lệ. Có grammar: 5/5.
     # Đổi lại tổng thời gian sinh tăng ~26%.
     json_schema: bool = True
+    # Bộ nhớ hội thoại (§10 — "rolling summary + short context").
+    #
+    # 0 = tắt hẳn, mỗi câu dịch biệt lập như trước. Bật lên thì đại từ ("it",
+    # "that one") phân giải được và gợi ý trả lời không lặp thứ vừa nói.
+    #
+    # Ngân sách: n_ctx=2048, system prompt ~200 token, output ~110 token — nên
+    # lịch sử không nên vượt ~1.5k token. `history_chars` là trần thô theo ký
+    # tự, cắt từ lượt cũ nhất.
+    history_turns: int = 6
+    history_chars: int = 1200
     extra_args: list[str] = field(default_factory=list)
 
     @property
@@ -157,7 +167,6 @@ class TtsConfig:
     length_scale: float = 1.0
     # §2.4.1 MVP scope — chốt phạm vi đọc tự động.
     auto_read_translation: bool = True
-    auto_read_intent: bool = False
     auto_read_replies: bool = False
     # Streaming theo câu/cụm để giảm time-to-first-audio (§2.4).
     stream_by_sentence: bool = True

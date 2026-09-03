@@ -88,10 +88,9 @@ Với mỗi câu, hệ thống phát lại **bốn bước theo thứ tự**:
 |---|---|---|
 | 1 | **Âm thanh gốc** — cắt đúng đoạn của câu đó từ chính file bạn chọn | (file gốc) |
 | 2 | **Bản dịch** | tiếng Việt |
-| 3 | **Hàm ý** | tiếng Việt |
-| 4 | **Gợi ý trả lời**: *"Có hai lựa chọn cho bạn. Một là: … Nghĩa là: … Hai là: …"* | xen kẽ |
+| 3 | **Gợi ý trả lời**: *"Có hai lựa chọn cho bạn. Một là: … Nghĩa là: … Hai là: …"* | xen kẽ |
 
-Bước 4 đổi giọng theo từng đoạn: khung dẫn và mục đích đọc giọng Việt, còn câu
+Bước 3 đổi giọng theo từng đoạn: khung dẫn và mục đích đọc giọng Việt, còn câu
 gợi ý đọc giọng **Anh** — đó là ngôn ngữ bạn sẽ nói ra. Một giọng đọc cả hai
 thì phần tiếng Anh nghe rất khó hiểu.
 
@@ -107,8 +106,8 @@ sẽ phát *trước cả* âm thanh gốc, vì streaming TTS bắt đầu ngay 
 Nút **"Tạm dừng"** cho bạn kiểm soát tay bất cứ lúc nào. Bấm "Tiếp tục" sẽ hủy
 chuỗi nghe lại đang dở và phát tiếp ngay.
 
-Thời lượng thực tế mỗi câu: khoảng **20 giây** (3s bản dịch + 2s hàm ý + 14s
-gợi ý trả lời qua 5 đoạn TTS).
+Thời lượng thực tế mỗi câu: khoảng **17 giây** (3s bản dịch + 14s gợi ý trả
+lời qua 5 đoạn TTS).
 
 > **Chi phí của trường "nghĩa là".** Đây chính là trường `meaning` mà §4.4 đã
 > bỏ đi ("mỗi reply thêm bản dịch sẽ làm tăng token → tăng latency"). Đưa lại
@@ -147,7 +146,6 @@ Hoặc bấm **"Dừng đọc"** để thử đường `client_request`.
 |---|---|
 | **Đang nghe** | transcript tạm (xám nghiêng) rồi transcript cuối |
 | **Bản dịch** | hiện dần theo từng ký tự — đây là `translation_delta` |
-| **Hàm ý** | người nói thực sự muốn gì |
 | **Gợi ý trả lời** | **bấm vào để nghe đọc** — đúng ngôn ngữ người đối diện dùng |
 | **Chỉ số** | E2E, TTFT, STT, Barge-in — đo trực tiếp |
 | **Nhật ký** | semantic event thô, để debug |

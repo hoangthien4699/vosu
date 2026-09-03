@@ -87,7 +87,7 @@ def _absolute_binary(program: str) -> str:
 @dataclass
 class TtsJob:
     utterance_id: str
-    field: str            # translation | intent | reply
+    field: str            # translation | reply
     text: str
     voice: str
     started_at: float

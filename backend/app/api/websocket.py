@@ -25,7 +25,8 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..ai.copilot import IntentDone, ReplyReady, SemanticEventParser, TranslationDelta
+from ..ai.copilot import ReplyReady, SemanticEventParser, TranslationDelta
+from ..ai.history import ConversationHistory
 from ..ai.llm import GenerationStats
 from ..ai.tts import PiperTts, SentenceSplitter, TtsUnavailable
 from ..audio.chunker import AudioChunker, AudioSegment
@@ -103,6 +104,13 @@ class CopilotSession:
 
         self.bus = EventBus(session_id, maxsize=config.session.event_queue_maxsize)
         self.state = SessionState(session_id)
+        # Bộ nhớ hội thoại: mỗi câu không còn được dịch biệt lập nữa (§10).
+        self.history = ConversationHistory(
+            max_turns=config.llm.history_turns,
+            max_chars=config.llm.history_chars,
+        )
+        #: reply của utterance hiện tại, giữ để biết người dùng chọn câu nào
+        self._current_replies: dict[str, list[str]] = {}
         self.tts = PiperTts(config) if config.tts.enabled else None
 
         vad = build_vad(config)
@@ -323,6 +331,8 @@ class CopilotSession:
 
         utterance.final_text = transcript.text
         utterance.language = transcript.language
+        if self.config.llm.history_turns > 0:
+            self.history.add(utterance_id, transcript.text, transcript.language)
         await self.bus.emit(
             EventType.STT_FINAL,
             utterance_id=utterance_id,
@@ -348,7 +358,16 @@ class CopilotSession:
         parser = SemanticEventParser()
         stats = GenerationStats()
         splitter = SentenceSplitter(self.config.tts.min_sentence_chars)
-        prompt = self.runtime.llm.build_prompt(transcript.text, transcript.language)
+        # Loại chính câu này khỏi lịch sử: nó đã nằm ở phần "Now they said"
+        # của prompt, đưa vào hai lần sẽ khiến model tưởng bị nói lặp.
+        context = (
+            self.history.render(exclude=utterance_id)
+            if self.config.llm.history_turns > 0
+            else ""
+        )
+        prompt = self.runtime.llm.build_prompt(
+            transcript.text, transcript.language, context
+        )
 
         async with self.runtime.job("llm"):
             token_stream = self.runtime.llm.stream(prompt, stats=stats)
@@ -358,6 +377,8 @@ class CopilotSession:
 
         for event in parser.finish():
             await self._emit_semantic(utterance_id, event, utterance, splitter)
+
+        self.history.set_translation(utterance_id, parser.result.translation)
 
         await self.bus.emit(
             EventType.COPILOT_DONE,
@@ -374,9 +395,6 @@ class CopilotSession:
         remainder = splitter.flush()
         if remainder and self._should_speak("translation"):
             self._speak(utterance_id, remainder, field="translation")
-
-        if self.config.tts.auto_read_intent and parser.result.intent:
-            self._speak(utterance_id, parser.result.intent, field="intent")
 
         # Utterance chỉ DONE sau khi worker đọc hết phần đã xếp hàng. Nếu
         # chuyển DONE ngay ở đây thì các mẩu còn trong hàng đợi sẽ bị worker
@@ -402,16 +420,10 @@ class CopilotSession:
                 for sentence in splitter.feed(event.text):
                     self._speak(utterance_id, sentence, field="translation")
 
-        elif isinstance(event, IntentDone):
-            utterance.mark_first_useful()
-            await self.bus.emit(
-                EventType.INTENT_DONE,
-                utterance_id=utterance_id,
-                data={"intent": event.intent},
-            )
 
         elif isinstance(event, ReplyReady):
             utterance.mark_first_useful()
+            self._current_replies.setdefault(utterance_id, []).append(event.text)
             await self.bus.emit(
                 EventType.REPLY_READY,
                 utterance_id=utterance_id,
@@ -432,7 +444,6 @@ class CopilotSession:
         cfg = self.config.tts
         return {
             "translation": cfg.auto_read_translation,
-            "intent": cfg.auto_read_intent,
             "reply": cfg.auto_read_replies,
         }.get(field, False)
 
@@ -620,18 +631,25 @@ class CopilotSession:
         if control.action == "speak_reply":
             # §2.4.1 MVP scope: quick reply CHỈ đọc khi người dùng chọn thủ công.
             utterance = self.state.current
-            if utterance is None or self.tts is None:
-                return
             text = control.text
-            if text is None and control.reply_index is not None:
-                return  # danh sách reply do client giữ; yêu cầu gửi kèm text
-            if text:
+            if utterance is None or not text:
+                return
+
+            # Ghi nhận lựa chọn TRƯỚC, và không phụ thuộc TTS: người dùng chọn
+            # câu nào là dữ liệu hội thoại cho lượt sau, còn việc đọc lên được
+            # hay không là chuyện khác. Gộp hai thứ này lại thì tắt TTS là mất
+            # luôn bộ nhớ về những gì người dùng đã đáp.
+            self.history.set_user_reply(utterance.id, text)
+
+            if self.tts is not None:
                 self._speak(utterance.id, text, field="reply", manual=True)
             return
 
         if control.action == "reset":
             await self._cancel_all_work()
             self.chunker.reset()
+            self.history.clear()
+            self._current_replies.clear()
 
     # -- dọn dẹp ---------------------------------------------------------- #
 
