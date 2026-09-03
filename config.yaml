@@ -1,0 +1,80 @@
+# Cấu hình nhánh `release-mac` — build macOS (Apple Silicon).
+#
+# PHẠM VI SỬ DỤNG: phát triển và kiểm thử logic pipeline.
+# KHÔNG dùng nhánh này để chốt Benchmark Gate — đặc tả §6 yêu cầu GPU NVIDIA
+# 6GB. `benchmarks/run_gate.py` sẽ in cảnh báo đậm nếu bạn thử.
+
+platform: macos
+
+paths:
+  models_dir: models
+  # `base` chứ không phải `small` như bản CUDA.
+  #
+  # CTranslate2 (backend của faster-whisper) KHÔNG có backend Metal/MPS, nên
+  # STT chạy CPU. Đo trên M4: base ~640ms, small chậm hơn đáng kể. Với mục
+  # đích phát triển, `base` giữ vòng lặp thử-sai ở mức chịu được.
+  # Đổi sang `small` nếu cần đối chiếu chất lượng với bản CUDA.
+  whisper_model: base
+  llm_gguf: models/qwen2.5-3b-instruct-q4_k_m.gguf
+  # brew install llama.cpp, rồi scripts/download_models.sh tự liên kết vào đây
+  llama_server_bin: models/llama-server
+  # Homebrew KHÔNG có formula `piper` — cài bằng `pip install piper-tts`,
+  # binary nằm trong venv. Trỏ thẳng vào đó để `make run` chạy được mà không
+  # cần activate venv trước.
+  piper_bin: .venv/bin/piper
+  piper_voice_vi: models/piper/vi_VN-vais1000-medium.onnx
+  piper_voice_en: models/piper/en_US-lessac-medium.onnx
+  silero_vad_onnx: models/silero_vad.onnx
+
+vad:
+  backend: silero
+  threshold: 0.5
+  min_silence_ms: 400
+  min_speech_ms: 200
+
+chunker:
+  min_partial_window_s: 1.5
+  partial_cooldown_s: 0.8
+  # STT trên CPU đắt hơn nhiều so với build CUDA. Partial là TÙY CHỌN (§2.2)
+  # nên tắt đi sẽ nhường toàn bộ CPU cho final STT — final vẫn luôn chạy vì
+  # nó do VAD endpoint kích hoạt, không phụ thuộc partial.
+  # Bật lại nếu muốn thấy transcript hiện dần trong lúc nói.
+  enable_partial: false
+
+stt:
+  beam_size: 1
+  language: null
+
+llm:
+  host: 127.0.0.1
+  port: 8080
+  n_ctx: 2048
+  n_predict: 160
+  temperature: 0.2
+  n_gpu_layers: null         # null -> DeviceProfile macos = 99 (Metal)
+
+tts:
+  enabled: true
+  voice: vi
+  auto_read_translation: true
+  auto_read_intent: false
+  auto_read_replies: false
+  stream_by_sentence: true
+  realtime_pacing: true
+
+vram:
+  # Unified memory — hard ceiling 5.5GB của §3.1 KHÔNG áp dụng ở đây, và
+  # VramGuard tự thành no-op vì không có nvidia-smi. Giữ số để cấu hình đồng
+  # nhất giữa hai nhánh, không phải để enforce.
+  expected_gb: 5.0
+  hard_ceiling_gb: 5.5
+  on_exceed: warn
+
+session:
+  max_concurrent_sessions: 1
+  idle_timeout_s: 180.0
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  log_level: INFO
