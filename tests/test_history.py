@@ -28,17 +28,34 @@ def test_render_bo_dung_luot_dang_xu_ly():
     assert "Câu số 1." in rendered
 
 
-def test_ghi_nhan_cau_nguoi_dung_da_chon():
-    h = make(2)
-    h.set_user_reply("utt_000", "Sure, let's do that.")
+def test_ghi_ca_hai_phia():
+    """Người dùng nói thật nên lượt của họ cũng đi qua STT — lịch sử phản ánh
+    đúng hội thoại, không phải suy đoán từ việc bấm nút nào."""
+    h = ConversationHistory()
+    h.add("u0", "I think we should wait.", "en")
+    h.add("u1", "Tôi đồng ý với anh.", "vi", is_user=True)
     rendered = h.render()
-    assert 'Them: "Câu số 0."' in rendered
-    assert 'You: "Sure, let\'s do that."' in rendered
+    assert 'Them: "I think we should wait."' in rendered
+    assert 'You: "Tôi đồng ý với anh."' in rendered
 
 
-def test_luot_chua_chon_reply_thi_khong_co_dong_you():
+def test_chi_co_luot_doi_phuong_thi_khong_co_dong_you():
     h = make(1)
     assert "You:" not in h.render()
+
+
+def test_uu_tien_ban_dich_thay_vi_nguyen_van():
+    """Model đọc lịch sử bằng một thứ tiếng thì mạch lạc hơn là trộn hai."""
+    h = ConversationHistory()
+    h.add("u0", "I think we should wait.", "en")
+    h.set_translation("u0", "Tôi nghĩ chúng ta nên đợi.")
+    assert 'Them: "Tôi nghĩ chúng ta nên đợi."' in h.render()
+
+
+def test_chua_co_ban_dich_thi_dung_nguyen_van():
+    h = ConversationHistory()
+    h.add("u0", "Raw text.", "en")
+    assert 'Them: "Raw text."' in h.render()
 
 
 def test_cat_tu_luot_cu_nhat_khi_vuot_tran_ky_tu():
@@ -67,5 +84,4 @@ def test_clear_xoa_sach():
 def test_set_translation_va_reply_cho_luot_khong_ton_tai_khong_no():
     h = make(1)
     h.set_translation("utt_khong_co", "x")
-    h.set_user_reply("utt_khong_co", "y")
     assert len(h) == 1

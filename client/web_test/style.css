@@ -40,12 +40,6 @@ main {
 .final { margin: 0; font-size: 16px; min-height: 1.5em; }
 .translation { font-size: 19px; line-height: 1.45; margin: 0; min-height: 1.5em; color: #cfe3ff; }
 .meta { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--dim); }
-.replies { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.replies li {
-  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
-  cursor: pointer; transition: border-color .12s;
-}
-.replies li:hover { border-color: var(--accent); }
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
 .metrics div { text-align: center; }
 .metrics b { display: block; font-size: 21px; font-variant-numeric: tabular-nums; }
@@ -91,9 +85,6 @@ main {
 .steps li.active { border-color: var(--accent); color: var(--accent); }
 .steps li.done   { border-color: var(--ok); color: var(--ok); }
 .steps li.skip   { opacity: .35; text-decoration: line-through; }
-.replies li .meaning {
-  display: block; margin-top: 4px; font-size: 12px; color: var(--warn);
-}
-.replies li .idx {
-  display: inline-block; min-width: 18px; color: var(--dim); font-weight: 600;
-}
+/* Chiều dịch ngược: câu để NÓI THEO, không phải để đọc hiểu */
+.translation.coach { color: var(--ok); }
+.hint { margin: 8px 0 0; font-size: 12px; color: var(--ok); }

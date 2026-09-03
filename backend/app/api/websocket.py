@@ -7,7 +7,10 @@ Sửa lỗi baseline v1 (§3.1, §6):
   - Có backpressure khi client gửi audio nhanh hơn tốc độ xử lý.
   - Có cơ chế cancellation (Barge-in).
 
-Luồng:
+Luồng (HAI CHIỀU — chiều suy từ ngôn ngữ Whisper nhận diện):
+    đối phương nói  -> dịch sang tiếng người dùng, đọc giọng thường
+    người dùng nói  -> dịch sang tiếng đối phương, đọc CHẬM để nói theo
+
     PCM binary -> AudioChunker -> STT -> LLM -> SemanticEventParser -> EventBus
                        |                                                  |
                        └-- speech_started -> Barge-in -> hủy TTS          v
@@ -25,7 +28,9 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..ai.copilot import ReplyReady, SemanticEventParser, TranslationDelta
+from ..ai.copilot import SemanticEventParser, TranslationDelta
+from ..ai.direction import Direction
+from ..ai.direction import resolve as resolve_direction
 from ..ai.history import ConversationHistory
 from ..ai.llm import GenerationStats
 from ..ai.tts import PiperTts, SentenceSplitter, TtsUnavailable
@@ -49,10 +54,11 @@ class _TtsItem:
     field: str = "translation"
     is_end: bool = False
     #: Do client yêu cầu tường minh. Được đọc kể cả khi utterance đã kết thúc —
-    #: §2.4.1 quy định quick reply CHỈ đọc khi người dùng chọn thủ công, mà
-    #: lúc đó pipeline đã xong từ lâu.
+    #: chế độ nghe lại phát từng phần sau khi pipeline đã xong từ lâu.
     manual: bool = False
     voice: str | None = None
+    #: Ghi đè tốc độ đọc. Dùng cho chiều dịch ngược: đọc chậm để nói theo.
+    length_scale: float | None = None
 
 
 @router.websocket("/ws/copilot")
@@ -109,8 +115,12 @@ class CopilotSession:
             max_turns=config.llm.history_turns,
             max_chars=config.llm.history_chars,
         )
-        #: reply của utterance hiện tại, giữ để biết người dùng chọn câu nào
-        self._current_replies: dict[str, list[str]] = {}
+        #: Ngôn ngữ đối phương, cập nhật theo lượt họ nói gần nhất. Dùng làm
+        #: đích khi dịch ngược câu của người dùng.
+        self._counterpart_language = config.session.counterpart_language
+        #: Chiều của lượt trước — dùng khi Whisper không nhận diện được ngôn
+        #: ngữ (câu ngắn), thay vì đoán bừa.
+        self._last_direction = Direction.TO_USER
         self.tts = PiperTts(config) if config.tts.enabled else None
 
         vad = build_vad(config)
@@ -301,7 +311,7 @@ class CopilotSession:
 
     async def _run_pipeline(self, segment: AudioSegment, utterance_id: str) -> None:
         try:
-            await self._transcribe_and_reply(segment, utterance_id)
+            await self._transcribe_and_respond(segment, utterance_id)
         except asyncio.CancelledError:
             logger.debug("%s: pipeline %s bị hủy", self.session_id, utterance_id)
             raise
@@ -314,7 +324,7 @@ class CopilotSession:
                 data={"message": str(exc), "code": "pipeline_error", "recoverable": True},
             )
 
-    async def _transcribe_and_reply(self, segment: AudioSegment, utterance_id: str) -> None:
+    async def _transcribe_and_respond(self, segment: AudioSegment, utterance_id: str) -> None:
         utterance = self.state.get(utterance_id)
         if utterance is None:
             return
@@ -331,8 +341,25 @@ class CopilotSession:
 
         utterance.final_text = transcript.text
         utterance.language = transcript.language
+
+        direction = resolve_direction(
+            transcript.language,
+            user_language=self.config.session.user_language,
+            fallback=self._last_direction,
+        )
+        self._last_direction = direction
+        if direction is Direction.TO_USER and transcript.language:
+            # Nghe được họ nói tiếng gì thì lấy đó làm đích cho chiều ngược,
+            # thay vì bám mãi vào mặc định trong config.
+            self._counterpart_language = transcript.language
+
         if self.config.llm.history_turns > 0:
-            self.history.add(utterance_id, transcript.text, transcript.language)
+            self.history.add(
+                utterance_id,
+                transcript.text,
+                transcript.language,
+                is_user=direction.is_outbound,
+            )
         await self.bus.emit(
             EventType.STT_FINAL,
             utterance_id=utterance_id,
@@ -344,6 +371,7 @@ class CopilotSession:
                 # Vị trí câu trong dòng byte audio — client đếm cùng dòng đó
                 # nên cắt lại được đúng đoạn audio GỐC để nghe đối chiếu.
                 "start_s": round(max(0.0, segment.start_s), 3),
+                "direction": direction.value,
             },
         )
 
@@ -352,7 +380,11 @@ class CopilotSession:
         await self.bus.emit(
             EventType.COPILOT_STARTED,
             utterance_id=utterance_id,
-            data={"source_text": transcript.text, "language": transcript.language},
+            data={
+                "source_text": transcript.text,
+                "language": transcript.language,
+                "direction": direction.value,
+            },
         )
 
         parser = SemanticEventParser()
@@ -366,7 +398,11 @@ class CopilotSession:
             else ""
         )
         prompt = self.runtime.llm.build_prompt(
-            transcript.text, transcript.language, context
+            transcript.text,
+            transcript.language,
+            direction=direction,
+            counterpart_language=self._counterpart_language,
+            history=context,
         )
 
         async with self.runtime.job("llm"):
@@ -394,7 +430,7 @@ class CopilotSession:
         # --- TTS phần translation còn lại ---
         remainder = splitter.flush()
         if remainder and self._should_speak("translation"):
-            self._speak(utterance_id, remainder, field="translation")
+            self._speak_translation(utterance_id, remainder)
 
         # Utterance chỉ DONE sau khi worker đọc hết phần đã xếp hàng. Nếu
         # chuyển DONE ngay ở đây thì các mẩu còn trong hàng đợi sẽ bị worker
@@ -407,32 +443,58 @@ class CopilotSession:
                     self.state.transition(utterance_id, UtteranceState.DONE)
 
     async def _emit_semantic(self, utterance_id, event, utterance, splitter) -> None:
-        if isinstance(event, TranslationDelta):
-            utterance.mark_first_useful()
-            await self.bus.emit(
-                EventType.TRANSLATION_DELTA,
-                utterance_id=utterance_id,
-                data={"text": event.text, "full": event.full},
-            )
-            # Streaming TTS theo câu (§2.4 / Task E6): bắt đầu đọc ngay khi có
-            # một câu hoàn chỉnh, không đợi cả JSON.
-            if self._should_speak("translation") and self.config.tts.stream_by_sentence:
-                for sentence in splitter.feed(event.text):
-                    self._speak(utterance_id, sentence, field="translation")
+        if not isinstance(event, TranslationDelta):
+            return
 
+        direction = self._last_direction
+        target = (
+            self._counterpart_language
+            if direction.is_outbound
+            else self.config.session.user_language
+        )
+        utterance.mark_first_useful()
+        await self.bus.emit(
+            EventType.TRANSLATION_DELTA,
+            utterance_id=utterance_id,
+            data={
+                "text": event.text,
+                "full": event.full,
+                "direction": direction.value,
+                "language": target,
+            },
+        )
 
-        elif isinstance(event, ReplyReady):
-            utterance.mark_first_useful()
-            self._current_replies.setdefault(utterance_id, []).append(event.text)
-            await self.bus.emit(
-                EventType.REPLY_READY,
-                utterance_id=utterance_id,
-                data={
-                    "index": event.index,
-                    "text": event.text,
-                    "meaning": event.meaning,
-                },
+        # Streaming TTS theo câu (§2.4 / Task E6): bắt đầu đọc ngay khi có một
+        # câu hoàn chỉnh, không đợi cả JSON.
+        if self._should_speak("translation") and self.config.tts.stream_by_sentence:
+            for sentence in splitter.feed(event.text):
+                self._speak_translation(utterance_id, sentence)
+
+    def _speak_translation(self, utterance_id: str, text: str) -> None:
+        """Đọc bản dịch, đúng giọng và đúng tốc độ cho chiều hiện tại."""
+        direction = self._last_direction
+        if direction.is_outbound:
+            # Người dùng phải NÓI THEO, không chỉ nghe hiểu — đọc chậm hẳn và
+            # bằng giọng của tiếng đối phương.
+            self._speak(
+                utterance_id,
+                text,
+                field="coach",
+                voice=self._voice_for(self._counterpart_language),
+                length_scale=self.config.tts.coach_length_scale,
             )
+        else:
+            self._speak(
+                utterance_id,
+                text,
+                field="translation",
+                voice=self._voice_for(self.config.session.user_language),
+            )
+
+    def _voice_for(self, language: str | None) -> str:
+        """Chọn giọng theo ngôn ngữ. Chỉ có hai giọng nên phần còn lại về "en"."""
+        code = (language or "en").strip().lower().split("-")[0]
+        return "vi" if code == "vi" else "en"
 
     # -- TTS -------------------------------------------------------------- #
 
@@ -442,10 +504,7 @@ class CopilotSession:
         if self._tts_mode == "manual":
             return False
         cfg = self.config.tts
-        return {
-            "translation": cfg.auto_read_translation,
-            "reply": cfg.auto_read_replies,
-        }.get(field, False)
+        return cfg.auto_read_translation if field == "translation" else False
 
     def _speak(
         self,
@@ -455,6 +514,7 @@ class CopilotSession:
         field: str,
         manual: bool = False,
         voice: str | None = None,
+        length_scale: float | None = None,
     ) -> None:
         """Xếp một đoạn vào hàng đợi đọc. KHÔNG chờ đọc xong.
 
@@ -466,7 +526,10 @@ class CopilotSession:
         if not text.strip():
             return
         self._tts_queue.put_nowait(
-            _TtsItem(utterance_id, text, field, manual=manual, voice=voice)
+            _TtsItem(
+                utterance_id, text, field,
+                manual=manual, voice=voice, length_scale=length_scale,
+            )
         )
 
     def _mark_speech_end(self, utterance_id: str) -> None:
@@ -500,7 +563,10 @@ class CopilotSession:
                     self.state.transition(item.utterance_id, UtteranceState.SPEAKING)
 
                 self._tts_current = asyncio.create_task(
-                    self._run_tts(item.utterance_id, item.text, item.field, item.voice)
+                    self._run_tts(
+                        item.utterance_id, item.text, item.field,
+                        item.voice, item.length_scale,
+                    )
                 )
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._tts_current
@@ -520,7 +586,12 @@ class CopilotSession:
                 dropped += 1
 
     async def _run_tts(
-        self, utterance_id: str, text: str, field: str, voice: str | None = None
+        self,
+        utterance_id: str,
+        text: str,
+        field: str,
+        voice: str | None = None,
+        length_scale: float | None = None,
     ) -> None:
         assert self.tts is not None
         voice = voice or self.config.tts.voice
@@ -551,7 +622,8 @@ class CopilotSession:
         started = _time.monotonic()
         try:
             async for audio in self.tts.synthesize(
-                utterance_id, text, field=field, voice=voice
+                utterance_id, text, field=field, voice=voice,
+                length_scale=length_scale,
             ):
                 chunks += 1
                 await self.bus.emit(
@@ -622,34 +694,16 @@ class CopilotSession:
             self._speak(
                 utterance.id,
                 control.text,
-                field=control.field or "reply",
+                field=control.field or "translation",
                 manual=True,
                 voice=control.voice,
             )
-            return
-
-        if control.action == "speak_reply":
-            # §2.4.1 MVP scope: quick reply CHỈ đọc khi người dùng chọn thủ công.
-            utterance = self.state.current
-            text = control.text
-            if utterance is None or not text:
-                return
-
-            # Ghi nhận lựa chọn TRƯỚC, và không phụ thuộc TTS: người dùng chọn
-            # câu nào là dữ liệu hội thoại cho lượt sau, còn việc đọc lên được
-            # hay không là chuyện khác. Gộp hai thứ này lại thì tắt TTS là mất
-            # luôn bộ nhớ về những gì người dùng đã đáp.
-            self.history.set_user_reply(utterance.id, text)
-
-            if self.tts is not None:
-                self._speak(utterance.id, text, field="reply", manual=True)
             return
 
         if control.action == "reset":
             await self._cancel_all_work()
             self.chunker.reset()
             self.history.clear()
-            self._current_replies.clear()
 
     # -- dọn dẹp ---------------------------------------------------------- #
 
