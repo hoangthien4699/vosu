@@ -6,7 +6,7 @@ import contextlib
 import logging
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api.websocket import router as websocket_router
@@ -92,6 +92,13 @@ async def show_config() -> JSONResponse:
 if WEB_CLIENT_DIR.exists():
     app.mount("/app", StaticFiles(directory=WEB_CLIENT_DIR, html=True), name="web_test")
 
-    @app.get("/")
-    async def index() -> FileResponse:
-        return FileResponse(WEB_CLIENT_DIR / "index.html")
+    @app.get("/", include_in_schema=False)
+    async def index() -> RedirectResponse:
+        """Chuyển hướng sang /app/ thay vì phục vụ index.html tại gốc.
+
+        index.html tham chiếu `style.css` và `app.js` theo đường dẫn TƯƠNG ĐỐI.
+        Phục vụ nó tại "/" thì chúng phân giải thành /style.css và /app.js —
+        cả hai 404, và trang hiện ra trắng trơn không CSS không JS. Trình duyệt
+        không báo lỗi gì rõ ràng, nên kiểu hỏng này rất dễ lọt.
+        """
+        return RedirectResponse("/app/")
