@@ -19,6 +19,10 @@ const ui = {
   lang: el("lang"), sttLatency: el("sttLatency"),
   translation: el("translation"), intent: el("intent"), replies: el("replies"),
   log: el("log"), pickFile: el("pickFile"), fileInput: el("fileInput"),
+  pauseBtn: el("pauseBtn"), autoPause: el("autoPause"),
+  autoPauseWrap: el("autoPauseWrap"), filePanel: el("filePanel"),
+  fileName: el("fileName"), fileBar: el("fileBar"), filePos: el("filePos"),
+  fileState: el("fileState"),
   mE2e: el("mE2e"), mE2eP95: el("mE2eP95"), mTtft: el("mTtft"),
   mStt: el("mStt"), mBarge: el("mBarge"), mUtt: el("mUtt"),
 };
@@ -34,6 +38,8 @@ const state = {
   e2eSamples: [],
   utterances: 0,
   replies: [],
+  file: null,        // bộ phát file, xem streamFile()
+  busy: null,        // theo dõi backend đã xử lý xong câu hiện tại chưa
 };
 
 /* ------------------------------- nhật ký ------------------------------- */
@@ -188,6 +194,7 @@ function stopPlayback() {
 
 function onEvent(event) {
   const { type, data, utterance_id: uttId } = event;
+  noteBusy(type);
 
   switch (type) {
     case "session_started":
@@ -219,6 +226,10 @@ function onEvent(event) {
       ui.sttLatency.textContent = `STT ${ms(data.latency_ms)}`;
       ui.mStt.textContent = ms(data.latency_ms);
       log(type, `[${data.language}] ${data.text}`);
+
+      // Server đã chốt được một câu -> giữ file lại cho tới khi xử lý xong.
+      beginUtteranceHold();
+      updateFileUi();
       break;
     }
 
@@ -338,6 +349,8 @@ function connect() {
 
 async function start() {
   try {
+    state.file = null;         // chế độ micro: không có gì để tạm dừng
+    updateFileUi();
     connect();
     await startCapture();
     state.running = true;
@@ -351,6 +364,14 @@ async function start() {
 
 function stop() {
   state.running = false;
+  if (state.busy?.settle) clearTimeout(state.busy.settle);
+  state.busy = null;
+  if (state.file) {
+    const wake = state.file.wake;
+    state.file = null;         // playbackLoop thấy khác tham chiếu thì tự thoát
+    if (wake) wake();
+  }
+  updateFileUi();
   ui.toggle.textContent = "Bắt đầu nghe";
   ui.stopTts.disabled = true;
   stopPlayback();
@@ -366,7 +387,92 @@ function stop() {
 /* Vì sao cần: sản phẩm này nghe NGƯỜI ĐỐI DIỆN nói ngoại ngữ. Muốn thử bằng
  * micro thì phải có người nói tiếng Anh với bạn. Chế độ này phát một file
  * audio qua đúng đường mà micro đi — cùng resample, cùng chunk 100ms, cùng
- * WebSocket — nên nó kiểm chứng đúng pipeline thật, không phải đường tắt.  */
+ * WebSocket — nên nó kiểm chứng đúng pipeline thật, không phải đường tắt.
+ *
+ * Tạm dừng an toàn nhờ một tính chất của kiến trúc: VAD phía server chạy theo
+ * FRAME, không theo đồng hồ thực. Ngừng gửi audio thì trạng thái VAD đóng băng
+ * nguyên vẹn; gửi tiếp là nó chạy đúng chỗ cũ. Không mất câu, không lệch biên. */
+
+function updateFileUi() {
+  const f = state.file;
+  if (!f) {
+    ui.filePanel.hidden = true;
+    ui.pauseBtn.hidden = true;
+    ui.autoPauseWrap.hidden = true;
+    return;
+  }
+  ui.filePanel.hidden = false;
+  ui.pauseBtn.hidden = false;
+  ui.autoPauseWrap.hidden = false;
+  ui.fileName.textContent = f.name;
+  ui.pauseBtn.textContent = f.paused ? "Tiếp tục" : "Tạm dừng";
+
+  const done = Math.min(f.index, f.chunks.length);
+  const pct = (done / f.chunks.length) * 100;
+  ui.fileBar.style.width = `${pct}%`;
+  ui.fileBar.classList.toggle("held", f.paused);
+
+  const at = (done * CHUNK_MS) / 1000;
+  const total = (f.chunks.length * CHUNK_MS) / 1000;
+  ui.filePos.textContent = `${at.toFixed(1)}s / ${total.toFixed(1)}s · câu ${state.utterances}`;
+  ui.fileState.textContent = f.finished
+    ? "đã phát hết"
+    : f.paused
+      ? (f.heldReason || "đang tạm dừng")
+      : "đang phát";
+}
+
+function pausePlayback(reason) {
+  const f = state.file;
+  if (!f || f.paused || f.finished) return;
+  f.paused = true;
+  f.heldReason = reason || "";
+  updateFileUi();
+}
+
+function resumePlayback() {
+  const f = state.file;
+  if (!f || !f.paused) return;
+  f.paused = false;
+  f.heldReason = "";
+  const resolve = f.wake;
+  f.wake = null;
+  if (resolve) resolve();
+  updateFileUi();
+}
+
+/* Backend đã xử lý xong câu hiện tại chưa?
+ *
+ * `copilot_done` chỉ nói LLM đã sinh xong — TTS có thể còn đang đọc, và một
+ * bản dịch nhiều câu sẽ có nhiều lượt tts_started/tts_done. Vì vậy phải đợi
+ * cả hai: LLM xong VÀ không còn lượt TTS nào đang chạy.                     */
+function noteBusy(type) {
+  if (!state.busy) return;
+  if (type === "copilot_done") state.busy.llmDone = true;
+  else if (type === "tts_started") state.busy.tts += 1;
+  else if (type === "tts_done" || type === "tts_cancelled" || type === "tts_error") {
+    state.busy.tts = Math.max(0, state.busy.tts - 1);
+  } else if (type === "error") state.busy.llmDone = true;
+  else return;
+
+  if (state.busy.llmDone && state.busy.tts === 0) {
+    const done = state.busy;
+    state.busy = null;
+    done.settle = setTimeout(() => {
+      log("file", "câu đã xử lý xong — phát tiếp");
+      resumePlayback();
+    }, 350);   // để tai kịp nghỉ giữa hai câu
+  }
+}
+
+function beginUtteranceHold() {
+  if (!state.file || !ui.autoPause.checked) return;
+  // Dừng ngay khi server chốt được một câu, để câu sau không chồng lên.
+  // Utterance mới sẽ hủy utterance đang chạy ở backend — đó chính là cái
+  // "loạn" mà chế độ này tránh.
+  pausePlayback("đang chờ xử lý xong câu này");
+  state.busy = { llmDone: false, tts: 0, settle: null };
+}
 
 async function streamFile(file) {
   if (state.running) stop();
@@ -389,8 +495,6 @@ async function streamFile(file) {
   }
   const pcm = resample(mono, decoded.sampleRate, TARGET_SR);
 
-  log("file", `${file.name} · ${decoded.sampleRate}Hz ${channels}ch · ${(decoded.duration).toFixed(1)}s`);
-
   // Chèn im lặng ở hai đầu: VAD cần nền im lặng để chốt được đầu và cuối câu.
   const pad = new Float32Array(TARGET_SR * 0.5);
   const tail = new Float32Array(TARGET_SR * 1.2);
@@ -399,19 +503,47 @@ async function streamFile(file) {
   full.set(pcm, pad.length);
   full.set(tail, pad.length + pcm.length);
 
+  const step = Math.round((TARGET_SR * CHUNK_MS) / 1000);
+  const chunks = [];
+  for (let i = 0; i < full.length; i += step) chunks.push(full.subarray(i, i + step));
+
+  state.file = {
+    name: file.name, chunks, index: 0,
+    paused: false, finished: false, heldReason: "", wake: null,
+  };
+  state.busy = null;
   state.running = true;
   ui.toggle.textContent = "Dừng";
   setStatus("đang phát file", "on");
+  log("file", `${file.name} · ${decoded.sampleRate}Hz ${channels}ch · ${decoded.duration.toFixed(1)}s`);
+  updateFileUi();
 
-  // Gửi đúng nhịp thời gian thực. Gửi dồn một lần sẽ không phản ánh đúng
-  // hành vi realtime của VAD và của backpressure.
-  const step = Math.round(TARGET_SR * CHUNK_MS / 1000);
-  for (let i = 0; i < full.length; i += step) {
-    if (!state.running || state.ws?.readyState !== WebSocket.OPEN) break;
-    state.ws.send(floatToPcm16(full.subarray(i, i + step)));
+  await playbackLoop();
+}
+
+async function playbackLoop() {
+  const f = state.file;
+  while (f === state.file && f.index < f.chunks.length) {
+    if (f.paused) {
+      // Chờ tới khi được tiếp tục. Không bận rộn quay vòng.
+      await new Promise((resolve) => { f.wake = resolve; });
+      continue;
+    }
+    if (!state.running || state.ws?.readyState !== WebSocket.OPEN) return;
+
+    state.ws.send(floatToPcm16(f.chunks[f.index]));
+    f.index += 1;
+    if (f.index % 5 === 0 || f.index === f.chunks.length) updateFileUi();
+
+    // Gửi đúng nhịp thời gian thực. Gửi dồn một lần sẽ không phản ánh đúng
+    // hành vi realtime của VAD và của backpressure.
     await new Promise((r) => setTimeout(r, CHUNK_MS));
   }
-  setStatus("phát xong — chờ kết quả", "on");
+  if (f === state.file) {
+    f.finished = true;
+    updateFileUi();
+    setStatus("phát xong — chờ kết quả", "on");
+  }
 }
 
 ui.pickFile.onclick = () => ui.fileInput.click();
@@ -424,6 +556,26 @@ ui.fileInput.onchange = async (event) => {
   } catch (err) {
     setStatus(`lỗi file: ${err.message}`, "err");
     log("error", err.message);
+  }
+};
+
+ui.pauseBtn.onclick = () => {
+  const f = state.file;
+  if (!f) return;
+  if (f.paused) {
+    // Người dùng bấm tiếp tục thì bỏ luôn việc chờ backend.
+    if (state.busy?.settle) clearTimeout(state.busy.settle);
+    state.busy = null;
+    resumePlayback();
+  } else {
+    pausePlayback("bạn đã tạm dừng");
+  }
+};
+
+ui.autoPause.onchange = () => {
+  if (!ui.autoPause.checked && state.file?.paused) {
+    state.busy = null;
+    resumePlayback();
   }
 };
 
