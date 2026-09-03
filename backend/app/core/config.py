@@ -98,7 +98,12 @@ class LlmConfig:
     host: str = "127.0.0.1"
     port: int = 8080
     n_ctx: int = 2048
-    n_predict: int = 160
+    # Output giờ chỉ còn một trường `translation` (~25 token). 160 là quá rộng
+    # và chỉ làm một lần kẹt vòng lặp tốn thêm 5 giây.
+    n_predict: int = 96
+    # Chống lặp. Quan sát thật: model kẹt sinh `”}”}”}...` tới hết n_predict.
+    # Grammar không cấm được vì đó là ký tự hợp lệ BÊN TRONG chuỗi JSON.
+    repeat_penalty: float = 1.15
     temperature: float = 0.2
     top_p: float = 0.9
     # Số layer offload lên GPU. None = lấy từ DeviceProfile.
@@ -122,25 +127,17 @@ class LlmConfig:
     # Với model không dùng SWA (Qwen) cờ này là no-op. Chi phí bộ nhớ ở
     # n_ctx=2048 đo được là không đáng kể (2780 so với 2790 MB).
     swa_full: bool = True
-    # Sinh kèm bản dịch tiếng Việt cho từng gợi ý trả lời.
+    # Ràng buộc output bằng GBNF grammar.
     #
-    # Đây CHÍNH LÀ trường `meaning` mà §4.4 đã bỏ đi: "mỗi reply thêm bản dịch
-    # sẽ làm tăng token → tăng latency". Đưa lại theo yêu cầu sản phẩm — người
-    # dùng là người Việt, câu gợi ý là tiếng Anh; không biết mình sắp nói gì
-    # thì không chọn được.
+    # KHÔNG phải tối ưu hóa. JSON Schema chỉ kiểm soát CẤU TRÚC, không kiểm
+    # soát nội dung bên trong chuỗi — mà `{`, `}` và dấu ngoặc kép cong đều là
+    # ký tự hợp lệ trong chuỗi JSON. Model viết `”}` giữa chuỗi rồi lảm nhảm
+    # tiếp, JSON vẫn "hợp lệ" nhưng người dùng đọc thấy rác.
     #
-    # Chi phí đo được (Gemma 3 4B, M4) — xem README để biết số mới nhất.
-    # `meaning` nằm cuối JSON nhưng KHÔNG miễn phí với đường tới hạn: prompt hệ
-    # thống dài thêm, và chi phí đó trả ngay từ token đầu tiên.
-    # Tắt đi nếu cần tối đa tốc độ cho hội thoại trực tiếp.
-    reply_meaning: bool = True
-    # Ràng buộc output bằng JSON Schema (llama.cpp dịch thành GBNF grammar).
-    #
-    # KHÔNG phải tối ưu hóa — là điều kiện để `reply_meaning` chạy được. Không
-    # ràng buộc thì Gemma 3 4B gộp cả hai reply vào một object với khóa trùng
-    # và bọc markdown fence: 0/5 câu ra JSON hợp lệ. Có grammar: 5/5.
-    # Đổi lại tổng thời gian sinh tăng ~26%.
-    json_schema: bool = True
+    # Đo thật với prompt CÓ lịch sử hội thoại, 6 câu:
+    #     json_schema   0/6 sạch
+    #     GBNF          6/6 sạch
+    grammar: bool = True
     # Bộ nhớ hội thoại (§10 — "rolling summary + short context").
     #
     # 0 = tắt hẳn, mỗi câu dịch biệt lập như trước. Bật lên thì đại từ ("it",
@@ -165,9 +162,12 @@ class TtsConfig:
     sample_rate: int = 22_050
     chunk_ms: int = 120
     length_scale: float = 1.0
+    # Tốc độ đọc khi dịch NGƯỢC (người dùng nói -> đọc tiếng đối phương).
+    # Chậm hơn hẳn vì người dùng phải nói theo, không phải chỉ nghe hiểu.
+    # Piper: số càng lớn càng chậm.
+    coach_length_scale: float = 1.35
     # §2.4.1 MVP scope — chốt phạm vi đọc tự động.
     auto_read_translation: bool = True
-    auto_read_replies: bool = False
     # Streaming theo câu/cụm để giảm time-to-first-audio (§2.4).
     stream_by_sentence: bool = True
     min_sentence_chars: int = 12
@@ -196,6 +196,12 @@ class VramConfig:
 
 @dataclass
 class SessionConfig:
+    #: Ngôn ngữ của NGƯỜI DÙNG. Whisper nhận diện ra tiếng này thì hiểu là
+    #: người dùng đang nói, và dịch NGƯỢC sang tiếng đối phương.
+    user_language: str = "vi"
+    #: Tiếng đối phương, dùng làm mặc định cho tới khi nghe họ nói lần đầu —
+    #: sau đó lấy theo ngôn ngữ thật nghe được.
+    counterpart_language: str = "en"
     max_concurrent_sessions: int = 1
     idle_timeout_s: float = 180.0  # §8 Giai đoạn 4 — giải phóng VRAM sau 3 phút
     # Backpressure (F5): số chunk audio tối đa xếp hàng trước khi cảnh báo/drop.

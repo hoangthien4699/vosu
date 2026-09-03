@@ -1,13 +1,17 @@
+"""Parser semantic event.
+
+Output LLM giờ chỉ còn MỘT trường `translation`. Cả `intent` (§4.4) lẫn
+`replies` đều đã bỏ: máy không nghĩ hộ câu trả lời nữa — người dùng tự nói
+bằng tiếng mình và máy dịch sang tiếng đối phương để họ nói theo.
+"""
 from __future__ import annotations
 
 import json
 
-from app.ai.copilot import ReplyReady, SemanticEventParser, TranslationDelta
+from app.ai.copilot import SemanticEventParser, TranslationDelta
 
-SAMPLE = {
-    "translation": "Tôi nghĩ chúng ta nên tạm gác lại cuộc thảo luận này.",
-    "replies": ["Understood. When can we revisit?", "Is there a blocker first?"],
-}
+VI = "Tôi nghĩ chúng ta nên tạm gác lại cuộc thảo luận này."
+EN = "I'd like us to hold off on this for now."
 
 
 def feed_all(text: str, size: int = 3):
@@ -19,53 +23,48 @@ def feed_all(text: str, size: int = 3):
     return events, parser
 
 
-def test_sinh_du_hai_loai_semantic_event():
-    events, parser = feed_all(json.dumps(SAMPLE, ensure_ascii=False))
-
-    assert any(isinstance(e, TranslationDelta) for e in events)
-    replies = [(e.index, e.text) for e in events if isinstance(e, ReplyReady)]
-    assert replies == [(0, SAMPLE["replies"][0]), (1, SAMPLE["replies"][1])]
-    assert parser.result.translation == SAMPLE["translation"]
+def test_ban_dich_hien_dan_qua_delta():
+    events, parser = feed_all(json.dumps({"translation": VI}, ensure_ascii=False))
+    deltas = [e for e in events if isinstance(e, TranslationDelta)]
+    assert deltas
+    assert "".join(e.text for e in deltas) == VI
+    assert parser.result.translation == VI
     assert not parser.result.malformed
 
 
 def test_khong_bao_gio_lo_json_tho_ra_ngoai():
-    """Contract §4.4 — frontend không được thấy dấu ngoặc/tên trường của LLM."""
-    events, _ = feed_all(json.dumps(SAMPLE, ensure_ascii=False), size=1)
-
+    """Contract §4.4 — lý do tồn tại của lớp parser ở backend."""
+    events, _ = feed_all(json.dumps({"translation": VI}, ensure_ascii=False), size=1)
     leaked = "".join(e.text for e in events if isinstance(e, TranslationDelta))
-    assert leaked == SAMPLE["translation"]
-    for forbidden in ('{', '}', '"translation"', '"replies"', '":'):
-        assert forbidden not in leaked, f"JSON thô lọt ra ngoài: {forbidden!r}"
+    assert leaked == VI
+    for forbidden in ("{", "}", '"translation"', '":'):
+        assert forbidden not in leaked, f"JSON thô lọt ra: {forbidden!r}"
 
 
-def test_translation_delta_cong_don_khop_full():
-    events, _ = feed_all(json.dumps(SAMPLE, ensure_ascii=False), size=2)
-    deltas = [e for e in events if isinstance(e, TranslationDelta)]
-    assert "".join(e.text for e in deltas) == deltas[-1].full == SAMPLE["translation"]
+def test_delta_phat_ra_truoc_khi_chuoi_dong():
+    parser = SemanticEventParser()
+    events = list(parser.feed('{"translation": "Tôi nghĩ'))
+    assert "".join(e.text for e in events if isinstance(e, TranslationDelta)) == "Tôi nghĩ"
 
 
+def test_chieu_nguoc_cung_dung_mot_truong():
+    """Dịch Việt -> Anh dùng chung schema; chiều do tầng trên quyết định."""
+    _, parser = feed_all(json.dumps({"translation": EN}, ensure_ascii=False))
+    assert parser.result.translation == EN
 
-def test_reply_khong_bi_lap_khi_finish():
-    events, _ = feed_all(json.dumps(SAMPLE, ensure_ascii=False))
-    indexes = [e.index for e in events if isinstance(e, ReplyReady)]
-    assert indexes == sorted(set(indexes))
+
+def test_bo_qua_markdown_fence():
+    events, _ = feed_all('```json\n' + json.dumps({"translation": VI}, ensure_ascii=False) + '\n```')
+    assert [e for e in events if isinstance(e, TranslationDelta)][-1].full == VI
 
 
-def test_chap_nhan_ten_truong_cua_baseline_v1():
-    """Model 3B lượng tử hóa hay quay về schema cũ — không được mất dữ liệu."""
-    payload = json.dumps(
-        {"trans": "Xin chào",
-         "suggested_replies": [{"tone": "Thân mật", "text": "Hi there!"}]},
-        ensure_ascii=False,
-    )
-    events, parser = feed_all(payload)
+def test_chap_nhan_ten_truong_cu():
+    _, parser = feed_all(json.dumps({"trans": "Xin chào"}, ensure_ascii=False))
     assert parser.result.translation == "Xin chào"
-    assert [e.text for e in events if isinstance(e, ReplyReady)] == ["Hi there!"]
 
 
-def test_json_cut_giua_chung_van_dung_duoc_phan_dich():
-    events, parser = feed_all('{"translation": "Tôi nghĩ chúng ta nên')
+def test_json_cut_giua_chung_van_dung_duoc():
+    _, parser = feed_all('{"translation": "Tôi nghĩ chúng ta nên')
     assert parser.result.translation == "Tôi nghĩ chúng ta nên"
     assert parser.result.is_useful, "bản dịch cụt vẫn hữu ích, không được vứt"
     assert parser.result.malformed
@@ -76,42 +75,14 @@ def test_result_rong_thi_khong_useful():
     assert not parser.result.is_useful
 
 
-def test_meaning_di_kem_reply():
-    """`meaning` là bản dịch tiếng Việt của reply — người dùng cần biết mình
-    sắp nói gì. §4.4 từng bỏ trường này vì latency; đưa lại theo yêu cầu sản
-    phẩm, và chi phí đã được đo lại."""
-    payload = json.dumps(
-        {"replies": [{"text": "Sure, that works.", "meaning": "Được, vậy cũng ổn."}]},
-        ensure_ascii=False,
-    )
-    events, parser = feed_all(payload)
-    replies = [e for e in events if isinstance(e, ReplyReady)]
-    assert [r.text for r in replies] == ["Sure, that works."]
-    assert [r.meaning for r in replies] == ["Được, vậy cũng ổn."]
-    assert parser.result.replies == ["Sure, that works."]
-
-
-def test_van_chap_nhan_tu_khoa_purpose_cu():
-    """Model đôi khi bám theo từ khóa cũ — không được mất dữ liệu vì thế."""
-    payload = json.dumps(
-        {"replies": [{"text": "Okay.", "purpose": "Đồng ý ngắn gọn."}]}, ensure_ascii=False
-    )
-    events, _ = feed_all(payload)
-    assert [e.meaning for e in events if isinstance(e, ReplyReady)] == ["Đồng ý ngắn gọn."]
-
-
 # --------------------------------------------------------------------------- #
 # Dọn rác cấu trúc do sinh có grammar
 # --------------------------------------------------------------------------- #
 
 def test_cat_rac_cau_truc_o_cuoi_gia_tri():
     """Grammar đảm bảo JSON đúng cấu trúc, nhưng `{`, `}` là ký tự HỢP LỆ bên
-    trong chuỗi JSON nên không cấm được. Quan sát thật với Gemma 3 4B:
-
-        "meaning":"Được rồi, chúng ta tạm dừng lại đây.},{"
-
-    JSON vẫn hợp lệ, chỉ là người dùng đọc thấy rác.
-    """
+    trong chuỗi JSON nên không cấm được — model từng nhét `},{` vào cuối bản
+    dịch rồi mới đóng chuỗi."""
     from app.ai.copilot import clean_value
 
     assert clean_value("Tạm dừng lại đây.},{") == "Tạm dừng lại đây."
@@ -121,39 +92,41 @@ def test_cat_rac_cau_truc_o_cuoi_gia_tri():
 def test_khong_cat_nham_dau_cau_binh_thuong():
     from app.ai.copilot import clean_value
 
-    for text in (
-        "Bình thường không có rác.",
-        'Anh ấy nói "được" rồi.',
-        "Câu hỏi phải không?",
-        "Kết thúc bằng dấu phẩy,",
-        "Ba chấm…",
-    ):
+    for text in ("Bình thường không có rác.", 'Anh ấy nói "được" rồi.',
+                 "Câu hỏi phải không?", "Kết thúc bằng dấu phẩy,", "Ba chấm…"):
         assert clean_value(text) == text, text
 
 
 def test_cat_het_thi_giu_nguyen():
-    """Không bao giờ trả về chuỗi rỗng — thà giữ rác còn hơn mất nội dung."""
     from app.ai.copilot import clean_value
 
     assert clean_value("}{") == "}{"
-    assert clean_value("]") == "]"
 
 
 def test_translation_co_rac_duoc_sua_lai_qua_delta():
     """UI đã hiện phần rác qua delta, nên phải phát thêm một delta sửa lại."""
-    payload = '{"translation":"Tôi nghĩ vậy.},{"}'
-    events, parser = feed_all(payload, size=4)
-
+    events, parser = feed_all('{"translation":"Tôi nghĩ vậy.},{"}', size=4)
     deltas = [e for e in events if isinstance(e, TranslationDelta)]
-    assert deltas[-1].full == "Tôi nghĩ vậy.", deltas[-1].full
+    assert deltas[-1].full == "Tôi nghĩ vậy."
     assert parser.result.translation == "Tôi nghĩ vậy."
 
 
-def test_rac_trong_reply_va_meaning_cung_duoc_cat():
-    payload = json.dumps(
-        {"replies": [{"text": "Okay.},{", "meaning": "Được rồi.},{"}]}, ensure_ascii=False
-    )
-    events, _ = feed_all(payload)
-    reply = next(e for e in events if isinstance(e, ReplyReady))
-    assert reply.text == "Okay."
-    assert reply.meaning == "Được rồi."
+def test_cat_vong_lap_o_cuoi():
+    """Quan sát thật: model kẹt sinh `”}”}”}...` tới hết n_predict.
+
+    Grammar không cấm được — đó là ký tự hợp lệ BÊN TRONG chuỗi JSON. Và bộ ký
+    tự chỉ có dấu ngoặc THẲNG sẽ trượt hoàn toàn, vì model dùng dấu CONG.
+    """
+    from app.ai.copilot import clean_value
+
+    looped = 'About two weeks, then it’s the contract expiration.”}' * 1
+    looped += '”}' * 20
+    assert clean_value(looped) == "About two weeks, then it’s the contract expiration."
+
+
+def test_khong_cat_nham_lap_co_nghia():
+    from app.ai.copilot import clean_value
+
+    for text in ("haha haha haha haha haha", "Được rồi được rồi được rồi.",
+                 "Cô ấy nói “vâng” rồi."):
+        assert clean_value(text) == text, text

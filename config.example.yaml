@@ -47,7 +47,7 @@ llm:
   host: 127.0.0.1
   port: 8080
   n_ctx: 2048
-  n_predict: 160
+  n_predict: 96
   temperature: 0.2
   n_gpu_layers: null             # null = lấy từ device profile (CUDA 36, Metal 99)
   # auto | chatml | gemma — "auto" suy từ tên file GGUF.
@@ -57,6 +57,12 @@ llm:
   # Giữ toàn bộ KV cache — BẮT BUỘC với Gemma 3 (sliding-window attention).
   # Thiếu cờ này, mỗi utterance phải xử lý lại toàn bộ system prompt:
   # 241 token/610ms thay vì 15 token/86ms. No-op với model không dùng SWA.
+  # Ràng buộc output bằng GBNF grammar. Không phải tối ưu hóa — JSON Schema
+  # chỉ kiểm soát cấu trúc, không cấm được `}` hay dấu ngoặc cong BÊN TRONG
+  # chuỗi. Đo với prompt có lịch sử: json_schema 0/6 sạch, GBNF 6/6.
+  grammar: true
+  # Chống lặp: model từng kẹt sinh `”}”}”}...` tới hết n_predict.
+  repeat_penalty: 1.15
   swa_full: true
   # Bộ nhớ hội thoại (§10). 0 = tắt, mỗi câu dịch biệt lập.
   history_turns: 6
@@ -69,7 +75,9 @@ tts:
   # §2.4.1 MVP scope — chốt để tránh audio dồn dập chồng lấp hội thoại thật.
   # Trường `intent` của §4.4 đã bỏ: người dùng chỉ cần bản dịch.
   auto_read_translation: true    # AUTO — giá trị cốt lõi khi nghe live
-  auto_read_replies: false       # chỉ đọc khi người dùng bấm chọn
+  # Tốc độ đọc khi dịch NGƯỢC (bạn nói tiếng Việt -> đọc tiếng đối phương).
+  # Chậm hơn hẳn vì bạn phải nói theo, không chỉ nghe hiểu. Lớn hơn = chậm hơn.
+  coach_length_scale: 1.35
   stream_by_sentence: true
   # Đẩy chunk theo nhịp thời gian thực. Tắt đi thì server dốc hết audio sang
   # client ngay lập tức và mất khả năng hủy giữa chừng (§2.4.1).
@@ -82,6 +90,12 @@ vram:
   on_exceed: warn                # warn | reject
 
 session:
+  # Ngôn ngữ CỦA BẠN. Whisper nhận diện ra tiếng này thì hiểu là bạn đang nói,
+  # và dịch NGƯỢC sang tiếng đối phương rồi đọc chậm để bạn nói theo.
+  user_language: vi
+  # Tiếng đối phương — chỉ là mặc định ban đầu; sau khi nghe họ nói lần đầu
+  # thì lấy theo ngôn ngữ thật nghe được.
+  counterpart_language: en
   max_concurrent_sessions: 1     # §10 — 6GB chỉ đủ phục vụ tốt 1 client
   idle_timeout_s: 180.0
 

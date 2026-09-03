@@ -16,8 +16,9 @@ Hai ràng buộc định hình thiết kế:
    lớn tiền tố đã cache của lượt N. Đặt lịch sử ở chỗ khác sẽ phá cache và
    đẩy TTFT lên (đo được: 15 token/86ms so với 241 token/610ms).
 
-Ghi lại cả câu người dùng đã CHỌN, không chỉ câu đối phương nói: chọn một gợi
-ý là tín hiệu mạnh nhất về việc người dùng thực sự đáp lại thế nào.
+Ghi cả hai phía. Người dùng nói thật (bằng tiếng của họ) nên lượt của họ cũng
+đi qua STT như lượt đối phương — lịch sử phản ánh đúng hội thoại đã diễn ra,
+không phải suy đoán từ việc họ bấm nút nào.
 """
 
 from __future__ import annotations
@@ -28,20 +29,26 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Turn:
-    """Một lượt: đối phương nói gì, ta dịch ra sao, người dùng đáp lại gì."""
+    """Một lượt của MỘT trong hai người.
+
+    Trước đây chỉ ghi lượt đối phương, còn câu người dùng đáp lại phải suy từ
+    việc họ bấm chọn gợi ý nào. Giờ người dùng nói thật nên cả hai phía đều đi
+    qua STT — lịch sử phản ánh đúng hội thoại, không phải suy đoán.
+    """
 
     utterance_id: str
-    speaker_text: str
+    text: str
     language: str | None = None
+    #: True nếu đây là lượt của NGƯỜI DÙNG.
+    is_user: bool = False
     translation: str = ""
-    #: Câu gợi ý người dùng đã chọn để nói ra. None = chưa chọn gì.
-    user_reply: str | None = None
 
     def render(self) -> str:
-        lines = [f'Them: "{self.speaker_text}"']
-        if self.user_reply:
-            lines.append(f'You: "{self.user_reply}"')
-        return "\n".join(lines)
+        # Ghi bản dịch, không phải nguyên văn: model đọc lịch sử bằng ngôn ngữ
+        # nó đang làm việc thì mạch lạc hơn là trộn hai thứ tiếng.
+        who = "You" if self.is_user else "Them"
+        content = self.translation.strip() or self.text
+        return f'{who}: "{content}"' 
 
 
 @dataclass
@@ -59,8 +66,15 @@ class ConversationHistory:
     def turns(self) -> list[Turn]:
         return list(self._turns)
 
-    def add(self, utterance_id: str, speaker_text: str, language: str | None) -> Turn:
-        turn = Turn(utterance_id, speaker_text.strip(), language)
+    def add(
+        self,
+        utterance_id: str,
+        text: str,
+        language: str | None,
+        *,
+        is_user: bool = False,
+    ) -> Turn:
+        turn = Turn(utterance_id, text.strip(), language, is_user=is_user)
         self._turns.append(turn)
         while len(self._turns) > self.max_turns:
             self._turns.popleft()
@@ -76,11 +90,6 @@ class ConversationHistory:
         turn = self.get(utterance_id)
         if turn is not None:
             turn.translation = translation.strip()
-
-    def set_user_reply(self, utterance_id: str, reply: str) -> None:
-        turn = self.get(utterance_id)
-        if turn is not None:
-            turn.user_reply = reply.strip()
 
     def clear(self) -> None:
         self._turns.clear()

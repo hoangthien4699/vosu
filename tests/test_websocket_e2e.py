@@ -22,23 +22,26 @@ from app.core.config import load_config
 from tests.synth import SR, silence, speech
 
 LLM_OUTPUT = json.dumps(
-    {
-        "translation": "Tôi nghĩ chúng ta nên tạm gác lại việc này.",
-        "replies": ["Understood. When can we revisit?", "Is there a blocker?"],
-    },
-    ensure_ascii=False,
+    {"translation": "Tôi nghĩ chúng ta nên tạm gác lại việc này."}, ensure_ascii=False
+)
+LLM_OUTPUT_EN = json.dumps(
+    {"translation": "I think we should hold off on this."}, ensure_ascii=False
 )
 
 
 class FakeStt:
-    def __init__(self):
+    """STT giả lập. `language`/`text` đổi được để mô phỏng cả hai chiều."""
+
+    def __init__(self, language: str = "en", text: str | None = None):
         self.calls = []
+        self.language = language
+        self.text = text or "I think we should table this for now."
 
     async def transcribe(self, pcm, *, is_final=True):
         self.calls.append(("final" if is_final else "partial", pcm.size))
         return Transcript(
-            text="I think we should table this for now.",
-            language="en",
+            text=self.text,
+            language=self.language,
             language_probability=0.98,
             is_final=is_final,
             audio_s=pcm.size / SR,
@@ -53,11 +56,22 @@ class FakeLlm:
         self.template = CHATML
         self.prompts: list[str] = []
         self.histories: list[str] = []
+        self.directions: list = []
 
-    def build_prompt(self, text, language, history=""):
-        prompt = build_prompt(text, language, self.template, history=history)
+    def build_prompt(self, text, language, *, direction=None, counterpart_language=None,
+                     history=""):
+        from app.ai.direction import Direction
+
+        direction = direction or Direction.TO_USER
+        prompt = build_prompt(
+            text, language, self.template,
+            direction=direction,
+            counterpart_language=counterpart_language or "en",
+            history=history,
+        )
         self.prompts.append(prompt)
         self.histories.append(history)
+        self.directions.append(direction)
         return prompt
 
     async def stream(self, prompt, *, stats=None, n_predict=None):
@@ -133,7 +147,6 @@ def test_luong_e2e_day_du(client):
     assert "stt_final" in types
     assert "copilot_started" in types
     assert "translation_delta" in types
-    assert "reply_ready" in types
     assert types[-1] == "copilot_done"
 
 
@@ -147,8 +160,7 @@ def test_moi_event_du_truong_bat_buoc(client):
         events = drain(ws, "copilot_done")
 
     utterance_scoped = {
-        "stt_final", "copilot_started", "copilot_done",
-        "translation_delta", "reply_ready",
+        "stt_final", "copilot_started", "copilot_done", "translation_delta",
     }
     for event in events:
         assert event["session_id"].startswith("sess_")
@@ -182,8 +194,7 @@ def test_khong_lo_json_tho_cua_llm_ra_frontend(client):
 
     deltas = [e for e in events if e["type"] == "translation_delta"]
     assert deltas
-    full = deltas[-1]["data"]["full"]
-    assert full == "Tôi nghĩ chúng ta nên tạm gác lại việc này."
+    assert deltas[-1]["data"]["full"] == "Tôi nghĩ chúng ta nên tạm gác lại việc này."
     for event in deltas:
         text = event["data"]["text"]
         for forbidden in ("{", "}", '"translation"', '"replies"', '":'):
@@ -295,10 +306,9 @@ def test_text_hoan_tat_truoc_khi_tts_doc_xong(tts_client):
     types = [e["type"] for e in events]
     assert "copilot_done" in types
     assert types.index("copilot_done") == len(types) - 1
-    # Phải có ít nhất một reply_ready TRƯỚC copilot_done: nghĩa là LLM stream
-    # đã chạy hết trong khi TTS còn đang đọc ở nhánh khác.
-    assert "reply_ready" in types
-    assert types.index("reply_ready") < types.index("copilot_done")
+    # translation_delta phải đến TRƯỚC copilot_done: LLM stream chạy hết trong
+    # khi TTS còn đang đọc ở nhánh khác.
+    assert types.index("translation_delta") < types.index("copilot_done")
 
 
 def test_tts_phat_su_kien_va_gui_binary(tts_client):
@@ -437,9 +447,7 @@ def test_doc_thu_cong_van_chay_sau_khi_utterance_ket_thuc(tts_client):
             if message.get("text") and json.loads(message["text"])["type"] == "tts_done":
                 break
 
-        ws.send_text(json.dumps({
-            "action": "speak_reply", "reply_index": 0, "text": "Understood, thanks.",
-        }))
+        ws.send_text(json.dumps({"action": "speak", "text": "Understood, thanks."}))
 
         started = None
         for _ in range(200):
@@ -451,9 +459,8 @@ def test_doc_thu_cong_van_chay_sau_khi_utterance_ket_thuc(tts_client):
                 started = event
                 break
 
-    assert started is not None, "bấm chọn gợi ý trả lời nhưng TTS không chạy"
+    assert started is not None, "yêu cầu đọc thủ công nhưng TTS không chạy"
     assert started["data"]["text"] == "Understood, thanks."
-    assert started["data"]["utterance_field"] == "reply"
 
 
 def test_che_do_manual_server_khong_tu_doc(tts_client):
@@ -481,9 +488,9 @@ def test_manual_roi_client_yeu_cau_doc_theo_thu_tu(tts_client):
             ws.send_bytes(payload[i : i + 3200])
         drain(ws, "copilot_done", limit=400)
 
-        for field, text in (("translation", "Bản dịch."),
-                            ("reply", "Two options for you."),
-                            ("reply", "One more thing.")):
+        for field, text in (("translation", "Câu một."),
+                            ("translation", "Câu hai."),
+                            ("translation", "Câu ba.")):
             ws.send_text(json.dumps({"action": "speak", "field": field, "text": text}))
 
         seen = []
@@ -498,8 +505,8 @@ def test_manual_roi_client_yeu_cau_doc_theo_thu_tu(tts_client):
                 break
 
     assert seen == [
-        ("translation", "Bản dịch."), ("reply", "Two options for you."),
-        ("reply", "One more thing."),
+        ("translation", "Câu một."), ("translation", "Câu hai."),
+        ("translation", "Câu ba."),
     ], f"thứ tự đọc sai: {seen}"
 
 
@@ -546,7 +553,9 @@ def test_cau_sau_nhin_thay_cau_truoc(client):
     histories = client.app.state.runtime.llm.histories
     assert len(histories) == 2
     assert "Them:" in histories[1], f"lượt 2 không thấy lượt 1: {histories[1]!r}"
-    assert "I think we should table this" in histories[1]
+    # Lịch sử ghi BẢN DỊCH, không phải nguyên văn: model đọc lịch sử bằng một
+    # thứ tiếng thì mạch lạc hơn là trộn hai.
+    assert "Tôi nghĩ chúng ta nên tạm gác lại" in histories[1]
 
 
 def test_lich_su_khong_chua_chinh_cau_dang_hoi(client):
@@ -558,28 +567,14 @@ def test_lich_su_khong_chua_chinh_cau_dang_hoi(client):
         send_utterance(ws)
         prompt = client.app.state.runtime.llm.prompts[-1]
 
-    marker = "Now they said:"
+    marker = "Now Them said:"
     assert prompt.count(marker) == 1
-    before, after = prompt.split(marker)
-    # cùng một câu (FakeStt luôn trả về cùng transcript) nên đếm số lần xuất hiện
-    assert before.count("I think we should table this") == 1, (
-        "câu hiện tại xuất hiện trong lịch sử lẫn phần hỏi"
+    before, _after = prompt.split(marker)
+    # Lịch sử ghi bản dịch còn phần hỏi ghi nguyên văn, nên câu hiện tại chỉ
+    # được xuất hiện đúng một lần ở phần hỏi.
+    assert before.count("I think we should table this") == 0, (
+        "câu hiện tại lọt vào cả khối lịch sử"
     )
-
-
-def test_cau_nguoi_dung_chon_di_vao_lich_su(client):
-    """Chọn một gợi ý là tín hiệu mạnh nhất về việc người dùng đáp lại thế nào."""
-    with client.websocket_connect("/ws/copilot") as ws:
-        ws.receive()
-        send_utterance(ws)
-        ws.send_text(json.dumps({
-            "action": "speak_reply", "reply_index": 0, "text": "Understood, thanks.",
-        }))
-        ws.send_text(json.dumps({"action": "ping"}))
-        send_utterance(ws)
-        history = client.app.state.runtime.llm.histories[-1]
-
-    assert 'You: "Understood, thanks."' in history, history
 
 
 def test_reset_xoa_lich_su(client):
@@ -598,3 +593,93 @@ def test_tat_lich_su_thi_prompt_khong_doi(client):
         send_utterance(ws)
         send_utterance(ws)
     assert all(h == "" for h in client.app.state.runtime.llm.histories)
+
+
+# --------------------------------------------------------------------------- #
+# Hai chiều dịch
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def vi_client(client):
+    """Như `client` nhưng STT trả về tiếng Việt — mô phỏng NGƯỜI DÙNG nói."""
+    client.app.state.runtime.stt = FakeStt("vi", "Tôi nghĩ chúng ta nên hoãn lại.")
+    client.app.state.runtime.llm = FakeLlm(LLM_OUTPUT_EN)
+    return client
+
+
+def test_doi_phuong_noi_thi_chieu_la_to_user(client):
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        events = send_utterance(ws)
+
+    final = next(e for e in events if e["type"] == "stt_final")
+    assert final["data"]["direction"] == "to_user"
+    delta = [e for e in events if e["type"] == "translation_delta"][-1]
+    assert delta["data"]["direction"] == "to_user"
+    assert delta["data"]["language"] == "vi", "dịch cho người dùng thì đích là tiếng Việt"
+
+
+def test_nguoi_dung_noi_thi_chieu_la_to_counterpart(vi_client):
+    """Whisper nhận ra tiếng Việt -> hiểu là người dùng đang nói -> dịch ngược."""
+    with vi_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        events = send_utterance(ws)
+
+    final = next(e for e in events if e["type"] == "stt_final")
+    assert final["data"]["direction"] == "to_counterpart"
+    delta = [e for e in events if e["type"] == "translation_delta"][-1]
+    assert delta["data"]["direction"] == "to_counterpart"
+    assert delta["data"]["language"] == "en", "dịch ngược thì đích là tiếng đối phương"
+    assert delta["data"]["full"] == "I think we should hold off on this."
+
+
+def test_prompt_dung_dung_chieu(vi_client):
+    from app.ai.direction import Direction
+
+    with vi_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        send_utterance(ws)
+    assert vi_client.app.state.runtime.llm.directions[-1] is Direction.TO_COUNTERPART
+
+
+def test_dich_nguoc_doc_cham_va_dung_giong_doi_phuong(tts_client):
+    """Người dùng phải NÓI THEO, không chỉ nghe hiểu."""
+    tts_client.app.state.runtime.stt = FakeStt("vi", "Tôi nghĩ chúng ta nên hoãn lại.")
+    tts_client.app.state.runtime.llm = FakeLlm(LLM_OUTPUT_EN)
+    cfg = tts_client.app.state.config
+
+    with tts_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        started = None
+        payload = utterance_stream()
+        for i in range(0, len(payload), 3200):
+            ws.send_bytes(payload[i : i + 3200])
+        for _ in range(500):
+            message = ws.receive()
+            if not message.get("text"):
+                continue
+            event = json.loads(message["text"])
+            if event["type"] == "tts_started":
+                started = event
+                break
+
+    assert started is not None, "chiều ngược không đọc gì"
+    assert started["data"]["utterance_field"] == "coach"
+    assert started["data"]["voice"] == "en", "phải đọc bằng giọng tiếng đối phương"
+    assert cfg.tts.coach_length_scale > cfg.tts.length_scale, (
+        "tốc độ đọc chiều ngược phải chậm hơn bình thường"
+    )
+
+
+def test_ngon_ngu_doi_phuong_lay_theo_thuc_te_nghe_duoc(client):
+    """Nghe họ nói tiếng Nhật thì chiều ngược phải dịch sang tiếng Nhật,
+    không bám mãi vào mặc định trong config."""
+    client.app.state.runtime.stt = FakeStt("ja", "その件は社内で確認します。")
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        send_utterance(ws)
+        client.app.state.runtime.stt = FakeStt("vi", "Vâng, tôi hiểu rồi.")
+        send_utterance(ws)
+        prompt = client.app.state.runtime.llm.prompts[-1]
+
+    assert "into Japanese" in prompt, "không bám theo ngôn ngữ thật của đối phương"

@@ -87,7 +87,7 @@ def _absolute_binary(program: str) -> str:
 @dataclass
 class TtsJob:
     utterance_id: str
-    field: str            # translation | reply
+    field: str            # translation | coach
     text: str
     voice: str
     started_at: float
@@ -169,6 +169,7 @@ class PiperTts:
         *,
         field: str = "translation",
         voice: str | None = None,
+        length_scale: float | None = None,
         on_chunk: Callable[[bytes, int], None] | None = None,
     ) -> AsyncIterator[bytes]:
         """Sinh audio PCM theo chunk. Dừng ngay khi `cancel()` được gọi."""
@@ -196,7 +197,12 @@ class PiperTts:
             _absolute_binary(self._config.paths.piper_bin),
             "--model", str(model),
             "--output-raw",
-            "--length-scale", str(self._config.tts.length_scale),
+            # Số càng lớn đọc càng chậm. Chiều dịch ngược dùng giá trị lớn hơn
+            # vì người dùng phải nói theo, không chỉ nghe hiểu.
+            "--length-scale", str(
+                length_scale if length_scale is not None
+                else self._config.tts.length_scale
+            ),
         ]
 
         try:

@@ -58,7 +58,6 @@ class ModelReport:
     json_ok: int = 0
     leaked: int = 0
     empty_translation: int = 0
-    missing_replies: int = 0
     errors: int = 0
 
     @property
@@ -115,24 +114,18 @@ async def evaluate(model_path: Path, runs: int, n_predict: int) -> ModelReport:
 
             if not result.malformed:
                 report.json_ok += 1
-            # Bản dịch phải LUÔN là tiếng Việt thuần, nên ký tự CJK trong đó
-            # là lỗi bất kể nguồn nói tiếng gì. Chỉ soi `translation` —
-            # `replies` mang ký tự CJK là ĐÚNG khi người nói dùng tiếng Trung
-            # hoặc Nhật, vì người dùng cần nói lại bằng chính ngôn ngữ đó.
+            # Bản dịch sang tiếng Việt phải là tiếng Việt thuần, nên ký tự CJK
+            # trong đó là lỗi bất kể nguồn nói tiếng gì.
             leaked = cjk_chars(result.translation)
             if leaked:
                 report.leaked += 1
             if not result.translation.strip():
                 report.empty_translation += 1
-            if len(result.replies) < 2:
-                report.missing_replies += 1
 
             report.samples.append({
                 "input": text,
                 "lang": language,
                 "translation": result.translation,
-                "intent": result.intent,
-                "replies": result.replies,
                 "cjk_leak": "".join(leaked),
                 "malformed": result.malformed,
                 "truncated": stats.truncated,
@@ -163,10 +156,9 @@ def render(reports: list[ModelReport], verbose: bool) -> str:
             f"{r.json_ok}/{r.n:<7} {r.leaked}/{r.n:<7} "
             f"{ttft.p50:>7.0f}ms  {total.p50:>8.0f}ms"
         )
-        if r.errors or r.empty_translation or r.missing_replies:
+        if r.errors or r.empty_translation:
             lines.append(
-                f"    (lỗi {r.errors} · dịch rỗng {r.empty_translation} "
-                f"· thiếu reply {r.missing_replies})"
+                f"    (lỗi {r.errors} · dịch rỗng {r.empty_translation})"
             )
     lines.append("")
 
@@ -179,9 +171,6 @@ def render(reports: list[ModelReport], verbose: bool) -> str:
             flag = "  <-- RÒ CJK" if sample["cjk_leak"] else ""
             lines.append(f"  [{sample['lang']}] {sample['input'][:58]}")
             lines.append(f"      dịch  : {sample['translation'][:70]}{flag}")
-            lines.append(f"      intent: {sample['intent'][:60]}")
-            for i, reply in enumerate(sample["replies"][:2]):
-                lines.append(f"      reply{i}: {reply[:60]}")
         lines.append("")
     return "\n".join(lines)
 
