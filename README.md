@@ -80,6 +80,11 @@ docker compose up             # chỉ build CUDA — xem ghi chú trong docker-c
 Mở `http://localhost:8000` để dùng web test client: nói → thấy transcript,
 bản dịch, hàm ý, gợi ý trả lời → nghe TTS → nói chen vào để thử Barge-in.
 
+Không có ai nói tiếng Anh với bạn để thử? Bấm **"Phát file…"** và chọn một file
+trong `benchmarks/audio/` — nó đi qua đúng đường mà micro đi.
+
+**Hướng dẫn chạy thử đầy đủ: [TESTING.md](TESTING.md).**
+
 ---
 
 ## Benchmark Gate

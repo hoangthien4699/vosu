@@ -18,7 +18,7 @@ const ui = {
   utteranceId: el("utteranceId"), partial: el("partial"), final: el("final"),
   lang: el("lang"), sttLatency: el("sttLatency"),
   translation: el("translation"), intent: el("intent"), replies: el("replies"),
-  log: el("log"),
+  log: el("log"), pickFile: el("pickFile"), fileInput: el("fileInput"),
   mE2e: el("mE2e"), mE2eP95: el("mE2eP95"), mTtft: el("mTtft"),
   mStt: el("mStt"), mBarge: el("mBarge"), mUtt: el("mUtt"),
 };
@@ -360,6 +360,72 @@ function stop() {
   state.audioCtx = null; state.node = null; state.stream = null;
   if (state.ws?.readyState === WebSocket.OPEN) state.ws.close();
 }
+
+/* ------------------- phát file thay cho micro ------------------------- */
+
+/* Vì sao cần: sản phẩm này nghe NGƯỜI ĐỐI DIỆN nói ngoại ngữ. Muốn thử bằng
+ * micro thì phải có người nói tiếng Anh với bạn. Chế độ này phát một file
+ * audio qua đúng đường mà micro đi — cùng resample, cùng chunk 100ms, cùng
+ * WebSocket — nên nó kiểm chứng đúng pipeline thật, không phải đường tắt.  */
+
+async function streamFile(file) {
+  if (state.running) stop();
+  connect();
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("hết giờ chờ kết nối")), 8000);
+    state.ws.addEventListener("open", () => { clearTimeout(timer); resolve(); }, { once: true });
+  });
+
+  const ctx = new AudioContext({ sampleRate: TARGET_SR });
+  const decoded = await ctx.decodeAudioData(await file.arrayBuffer());
+  await ctx.close();
+
+  // Trộn về mono: micro là mono, và VAD/Whisper đều mong đợi 1 kênh.
+  const channels = decoded.numberOfChannels;
+  const mono = new Float32Array(decoded.length);
+  for (let c = 0; c < channels; c++) {
+    const data = decoded.getChannelData(c);
+    for (let i = 0; i < mono.length; i++) mono[i] += data[i] / channels;
+  }
+  const pcm = resample(mono, decoded.sampleRate, TARGET_SR);
+
+  log("file", `${file.name} · ${decoded.sampleRate}Hz ${channels}ch · ${(decoded.duration).toFixed(1)}s`);
+
+  // Chèn im lặng ở hai đầu: VAD cần nền im lặng để chốt được đầu và cuối câu.
+  const pad = new Float32Array(TARGET_SR * 0.5);
+  const tail = new Float32Array(TARGET_SR * 1.2);
+  const full = new Float32Array(pad.length + pcm.length + tail.length);
+  full.set(pad, 0);
+  full.set(pcm, pad.length);
+  full.set(tail, pad.length + pcm.length);
+
+  state.running = true;
+  ui.toggle.textContent = "Dừng";
+  setStatus("đang phát file", "on");
+
+  // Gửi đúng nhịp thời gian thực. Gửi dồn một lần sẽ không phản ánh đúng
+  // hành vi realtime của VAD và của backpressure.
+  const step = Math.round(TARGET_SR * CHUNK_MS / 1000);
+  for (let i = 0; i < full.length; i += step) {
+    if (!state.running || state.ws?.readyState !== WebSocket.OPEN) break;
+    state.ws.send(floatToPcm16(full.subarray(i, i + step)));
+    await new Promise((r) => setTimeout(r, CHUNK_MS));
+  }
+  setStatus("phát xong — chờ kết quả", "on");
+}
+
+ui.pickFile.onclick = () => ui.fileInput.click();
+ui.fileInput.onchange = async (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    await streamFile(file);
+  } catch (err) {
+    setStatus(`lỗi file: ${err.message}`, "err");
+    log("error", err.message);
+  }
+};
 
 ui.toggle.onclick = () => (state.running ? stop() : start());
 ui.stopTts.onclick = () => {
