@@ -1,0 +1,32 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# --- Model weights: KHÔNG commit (nhiều GB) ---
+models/*
+!models/.gitkeep
+!models/README.md
+
+# --- Kết quả benchmark: sinh ra khi chạy, không commit ---
+benchmarks/results/*
+!benchmarks/results/.gitkeep
+
+# --- Cấu hình cục bộ ---
+.env
+config.yaml
+!config.example.yaml
+
+# --- Audio mẫu ---
+*.wav
+*.mp3
+!tests/fixtures/*.wav
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/

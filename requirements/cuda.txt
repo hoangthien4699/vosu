@@ -1,0 +1,11 @@
+# Build NVIDIA/CUDA.
+#
+# Yêu cầu hệ thống (KHÔNG cài qua pip được):
+#   - NVIDIA driver + CUDA 12.x
+#   - cuBLAS + cuDNN 9 (faster-whisper/CTranslate2 cần)
+#   - binary `llama-server` build với -DGGML_CUDA=ON  -> models/llama-server
+#   - `piper` binary trong PATH
+-r base.txt
+
+faster-whisper==1.1.1
+ctranslate2==4.5.0

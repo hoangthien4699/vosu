@@ -1,0 +1,14 @@
+# Build macOS (Apple Silicon).
+#
+# Yêu cầu hệ thống:
+#   - binary `llama-server` build với Metal (-DGGML_METAL=ON) -> models/llama-server
+#     hoặc: brew install llama.cpp
+#   - `piper` binary trong PATH  (brew install piper  |  pip install piper-tts)
+#
+# LƯU Ý KIẾN TRÚC: CTranslate2 không có backend Metal/MPS, nên STT chạy CPU.
+# Build này dùng để phát triển và kiểm thử logic pipeline — KHÔNG dùng để
+# chốt Benchmark Gate (§6 của đặc tả yêu cầu phần cứng NVIDIA 6GB).
+-r base.txt
+
+faster-whisper==1.1.1
+ctranslate2==4.5.0
