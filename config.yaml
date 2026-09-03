@@ -15,10 +15,11 @@ paths:
   # đích phát triển, `base` giữ vòng lặp thử-sai ở mức chịu được.
   # Đổi sang `small` nếu cần đối chiếu chất lượng với bản CUDA.
   whisper_model: base
-  # Gemma 3 4B thay Qwen2.5-3B: Qwen trả quick reply sai ngôn ngữ ở một nửa
-  # số ca đo được, mà reply tồn tại để người dùng NÓI LẠI với người đối diện.
-  # Trên Mac không có trần VRAM nên phần nặng thêm 451 MB không thành vấn đề.
-  llm_gguf: models/gemma-3-4b-it-q4_k_m.gguf
+  # Qwen3.5-2B Q8_0. Q8 chứ không phải Q4: model 2B nhỏ nên lượng tử hóa
+  # 4-bit làm hụt chất lượng dịch rõ hơn model lớn. File vẫn nhẹ hơn một model
+  # 4B nén Q4 (1.9GB so với 2.4GB), và trả lại ~500MB VRAM.
+  # Đổi model chỉ là đổi dòng này — prompt template tự nhận diện theo tên file.
+  llm_gguf: models/qwen3.5-2b-q8_0.gguf
   # brew install llama.cpp, rồi scripts/download_models.sh tự liên kết vào đây
   llama_server_bin: models/llama-server
   # Homebrew KHÔNG có formula `piper` — cài bằng `pip install piper-tts`,

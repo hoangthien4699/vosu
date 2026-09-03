@@ -234,52 +234,78 @@ ngắn như "Yes.", "Ừ."), hệ thống giữ chiều của lượt trước t
 Trường `intent` (§4.4) và `replies` đều đã gỡ. Output LLM còn đúng **một
 trường** `translation`, từ ~110 token xuống ~20.
 
-### Model LLM: Gemma 3 4B, không phải Qwen2.5-3B
+### Model LLM: Qwen3.5-2B Q8_0
 
-Đặc tả v4.1.0 chọn Qwen2.5-3B. Qwen rò tiếng Trung vào bản dịch tiếng Việt khi
-chạy thật (`"Tôi nghĩ chúng ta nên推迟这次讨论目前。"`); Gemma 3 hỗ trợ đa ngôn
-ngữ tốt hơn đáng kể. Đổi model là một dòng trong `config.yaml` — prompt template
-là dữ liệu, chọn theo `llm.prompt_template` (`auto` suy từ tên file GGUF).
+Đặc tả v4.1.0 chọn Qwen2.5-3B. Đã thử ba model trên **chính prompt của dự án**,
+hội thoại 8 lượt xen kẽ hai chiều:
 
-| | Qwen2.5-3B | Gemma 3 4B |
+| | Qwen3.5-2B Q8_0 | Gemma 3 4B Q4_K_M | Qwen2.5-3B Q4_K_M |
+|---|---|---|---|
+| File | **1.9 GB** | 2.3 GB | 2.0 GB |
+| RSS khi nạp | **2119 MB** | 2617 MB | 1994 MB |
+| Sai ngôn ngữ | 0/8 | 0/8 | 0/8 |
+| Rác trong bản dịch | **0/8** | **0/8** | 2/8 (rò tiếng Trung) |
+| TTFT P50 | 441ms | **320ms** | 225ms |
+| Tổng sinh P50 | **956ms** | 1018ms | 699ms |
+
+Qwen2.5-3B loại vì rò tiếng Trung vào bản dịch tiếng Việt
+(`"Họ đang考虑推迟发布到下一季度。"`) — lỗi này đã lặp lại ở mọi lần đo.
+
+Giữa hai model còn lại, **chất lượng dịch sau khi sửa prompt là ngang nhau** —
+cả hai đều còn lỗi lẻ tẻ, chỉ khác loại. Lý do chọn Qwen3.5-2B là **bộ nhớ**:
+
+| | Ước tính tổng VRAM | Dự phòng dưới trần 5.5GB |
 |---|---|---|
-| Template | ChatML | `<start_of_turn>`, **không có vai trò system** |
-| Stop token | `<\|im_end\|>` | `<end_of_turn>` |
-| Cần `--swa-full` | không | **có** |
-| RSS khi nạp | 2008 MB | 2459 MB |
+| Qwen3.5-2B Q8_0 | 5.17 GB | **0.33 GB** |
+| Gemma 3 4B Q4_K_M | 5.50 GB | **0** |
 
-#### `--swa-full` là bắt buộc với Gemma
+(Whisper small ~1.8GB + LLM + KV ~0.5GB + CUDA overhead ~0.8GB, theo §3.1.)
 
-Gemma 3 dùng sliding-window attention, và llama.cpp **không tái dùng được
-prefix cache một phần** với SWA nếu thiếu cờ này — mỗi utterance phải xử lý lại
-toàn bộ system prompt.
+Gemma đẩy build CUDA lên đúng mép trần. Qwen3.5-2B trả lại ~500 MB — và làm
+được điều đó **ở lượng tử hóa Q8_0**, gần như không mất chất lượng, trong khi
+Gemma đã là Q4. Với model 2B, Q4 làm hụt chất lượng dịch rõ hơn hẳn so với
+model lớn, nên Q8 là lựa chọn đúng chứ không phải xa xỉ.
 
-| | Xử lý prompt mỗi câu |
-|---|---|
-| không có cờ | 241 token / 610ms |
-| `--swa-full` | 15 token / 86ms |
+Đổi model là **một dòng** trong `config.yaml` — prompt template tự nhận diện
+theo tên file GGUF. Chạy lại phép so sánh bất cứ lúc nào:
 
-#### GBNF grammar là bắt buộc, không phải tối ưu hóa
+```bash
+python -m benchmarks.compare_models \
+    --model models/qwen3.5-2b-q8_0.gguf \
+    --model models/gemma-3-4b-it-q4_k_m.gguf
+```
 
-JSON Schema chỉ kiểm soát **cấu trúc**, không kiểm soát nội dung *bên trong*
-chuỗi. `{`, `}` và dấu ngoặc kép cong đều hợp lệ trong chuỗi JSON, nên model
-viết `”}` giữa chuỗi rồi lảm nhảm tiếp — JSON vẫn "hợp lệ", người dùng đọc thấy
-rác.
+Công cụ đo được `sai ngôn ngữ` và `rác`; còn **có tự nhiên không thì phải tự
+đọc** — chỉ người nói tiếng đó mới phán được, nên nó in đủ output ra.
 
-Đo với prompt **có lịch sử hội thoại**, 6 câu:
+#### Prompt quan trọng ngang model
 
-| | Sạch |
-|---|---|
-| `json_schema` | **0/6** |
-| GBNF cấm ký tự cấu trúc | **6/6** |
+Ba lần sửa prompt cải thiện **cả hai model** nhiều hơn là đổi model:
 
-Không có lịch sử thì `json_schema` cũng sạch — lịch sử chứa nhiều chuỗi trong
-ngoặc kép nên nó mồi cho model sinh đúng cái mẫu gây lỗi. **Test không có lịch
-sử sẽ cho kết quả sạch giả.**
+| Sửa | Trước | Sau |
+|---|---|---|
+| Nói rõ giữ nguyên vai | *"anh chốt giúp em"* → "**I'll help you**" (đảo vai) | "can you finalize... **for me**" |
+| Đọc đúng mốc thời gian | *"by three"* → "vào **ngày ba**" | "vào **ba giờ**" |
+| Tách bạch lịch sử khỏi câu hiện tại | model 2B **dịch nhầm lượt trước** | dịch đúng câu đang hỏi |
 
-> **Cảnh báo VRAM cho build CUDA:** Gemma nặng hơn Qwen 451 MB, mà ngân sách ở
-> §3.1 tính cho Qwen và đã sát mép 5.5GB. **Bắt buộc chạy lại B4 trên phần cứng
-> NVIDIA** trước khi chốt.
+Cái thứ ba là bài học: khối lịch sử và câu cần dịch nằm cùng một lượt user, và
+với model càng nhỏ thì ranh giới mờ càng dễ làm nó lạc. Giờ có `=== CONTEXT
+ONLY — DO NOT TRANSLATE ===` và `TRANSLATE EXACTLY THIS ONE LINE`.
+
+#### Ba họ template, chọn theo tên file
+
+| | ChatML | Gemma | Qwen3 |
+|---|---|---|---|
+| Vai `system` riêng | có | **không** (gộp vào lượt user) | có |
+| Stop token | `<\|im_end\|>` | `<end_of_turn>` | `<\|im_end\|>` |
+| Đặc biệt | | | điền sẵn `<think></think>` rỗng |
+
+Qwen3/3.5 có chế độ *thinking*. Chat template chính thức tắt nó bằng cách điền
+sẵn một khối `<think>\n\n</think>\n\n` rỗng đầu lượt assistant — không điền
+thì model suy nghĩ dài dòng, mà với dịch câu ngắn đó là latency thuần túy.
+
+`--swa-full` chỉ cần cho Gemma (sliding-window attention); với Qwen nó là
+no-op, giữ bật để đổi model không phải nhớ đổi cờ.
 
 ### Bộ nhớ hội thoại
 

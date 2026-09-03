@@ -27,15 +27,22 @@ fetch "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/sil
       "$MODELS/silero_vad.onnx"
 
 echo
-echo "==> Gemma 3 4B Instruct Q4_K_M (~2.3 GB)"
-fetch "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" \
-      "$MODELS/gemma-3-4b-it-q4_k_m.gguf"
+echo "==> Qwen3.5-2B Instruct Q8_0 (~1.9 GB) — model đang dùng"
+# Q8_0 chứ không phải Q4: model 2B nhỏ nên lượng tử hóa 4-bit làm hụt chất
+# lượng dịch rõ hơn nhiều so với model lớn. Q8_0 gần như không mất gì, mà file
+# vẫn nhỏ hơn một model 4B nén Q4.
+fetch "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q8_0.gguf" \
+      "$MODELS/qwen3.5-2b-q8_0.gguf"
 
-# Qwen2.5-3B là model gốc của đặc tả, giữ lại để đối chiếu. Bỏ qua bằng
-# VOSU_SKIP_QWEN=1 nếu không cần (tiết kiệm 2GB băng thông).
-if [[ "${VOSU_SKIP_QWEN:-0}" != "1" ]]; then
+# Các model đã đánh giá, giữ lại để đối chiếu. Bỏ qua bằng VOSU_SKIP_ALT=1.
+if [[ "${VOSU_SKIP_ALT:-0}" != "1" ]]; then
   echo
-  echo "==> Qwen2.5-3B-Instruct Q4_K_M (~2.0 GB, để đối chiếu)"
+  echo "==> Gemma 3 4B Q4_K_M (~2.3 GB, để đối chiếu)"
+  fetch "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" \
+        "$MODELS/gemma-3-4b-it-q4_k_m.gguf"
+
+  echo
+  echo "==> Qwen2.5-3B Q4_K_M (~2.0 GB, model gốc của đặc tả)"
   fetch "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf" \
         "$MODELS/qwen2.5-3b-instruct-q4_k_m.gguf"
 fi

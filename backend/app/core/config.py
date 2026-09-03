@@ -35,7 +35,7 @@ class PathsConfig:
     models_dir: str = "models"
     # faster-whisper: tên model trên HF hoặc đường dẫn thư mục đã convert.
     whisper_model: str = "small"
-    llm_gguf: str = "models/gemma-3-4b-it-q4_k_m.gguf"
+    llm_gguf: str = "models/qwen3.5-2b-q8_0.gguf"
     llama_server_bin: str = "models/llama-server"
     piper_bin: str = "piper"
     piper_voice_vi: str = "models/piper/vi_VN-vais1000-medium.onnx"
