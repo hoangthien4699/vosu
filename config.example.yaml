@@ -12,7 +12,10 @@ platform: null
 paths:
   models_dir: models
   whisper_model: small           # tiny|base|small|medium — MVP ưu tiên small (§3.1)
-  llm_gguf: models/qwen2.5-3b-instruct-q4_k_m.gguf
+  # Gemma 3 4B thay cho Qwen2.5-3B: Qwen rò tiếng Trung vào bản dịch tiếng
+  # Việt (quan sát thật: "Tôi nghĩ chúng ta nên推迟这次讨论目前"). Gemma 3 hỗ
+  # trợ đa ngôn ngữ tốt hơn. Đổi lại model nặng hơn ~0.36GB — xem lại B4.
+  llm_gguf: models/gemma-3-4b-it-q4_k_m.gguf
   llama_server_bin: models/llama-server
   piper_bin: piper
   piper_voice_vi: models/piper/vi_VN-vais1000-medium.onnx
@@ -47,6 +50,14 @@ llm:
   n_predict: 160
   temperature: 0.2
   n_gpu_layers: null             # null = lấy từ device profile (CUDA 36, Metal 99)
+  # auto | chatml | gemma — "auto" suy từ tên file GGUF.
+  # Dùng sai template thì model vẫn sinh chữ, chỉ là chất lượng tệ đi khó
+  # truy vết; không có lỗi nào được ném ra.
+  prompt_template: auto
+  # Giữ toàn bộ KV cache — BẮT BUỘC với Gemma 3 (sliding-window attention).
+  # Thiếu cờ này, mỗi utterance phải xử lý lại toàn bộ system prompt:
+  # 241 token/610ms thay vì 15 token/86ms. No-op với model không dùng SWA.
+  swa_full: true
   startup_timeout_s: 90.0
 
 tts:

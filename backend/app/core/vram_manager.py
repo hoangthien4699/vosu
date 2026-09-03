@@ -142,6 +142,10 @@ class LlamaServerManager:
         ]
         if cfg.continuous_batching:
             cmd.append("-cb")
+        if cfg.swa_full:
+            # Bắt buộc để tái dùng prefix cache với Gemma 3 (SWA). Xem chú
+            # thích ở core/config.py::LlmConfig.swa_full.
+            cmd.append("--swa-full")
         cmd.extend(cfg.extra_args)
         return cmd
 

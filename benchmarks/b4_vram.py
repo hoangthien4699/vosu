@@ -14,7 +14,7 @@ from .common import BenchmarkResult, Check, base_parser, run_cli
 
 
 async def _run(args) -> BenchmarkResult:
-    from app.ai.llm import LlmClient, build_prompt
+    from app.ai.llm import LlmClient
     from app.ai.stt import SttEngine
     from app.core.config import load_config
     from app.core.vram_manager import LlamaServerManager, query_vram
@@ -65,7 +65,7 @@ async def _run(args) -> BenchmarkResult:
 
     async def hammer_llm() -> None:
         for _ in range(3):
-            await client.complete(build_prompt("Let's discuss this later.", "en"))
+            await client.complete(client.build_prompt("Let's discuss this later.", "en"))
 
     llm_task = asyncio.create_task(hammer_llm())
     for _name, pcm in samples:

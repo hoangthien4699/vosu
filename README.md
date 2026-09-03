@@ -203,6 +203,69 @@ backend/app/
 └── api/       websocket.py
 ```
 
+### Model LLM: Gemma 3 4B, không phải Qwen2.5-3B
+
+Đặc tả v4.1.0 chọn Qwen2.5-3B. Đã đo cả hai trên **chính prompt của dự án**,
+8 câu, cùng cấu hình, trên M4:
+
+| | Gemma 3 4B | Qwen2.5-3B |
+|---|---|---|
+| JSON hợp lệ | 8/8 | 8/8 |
+| Bản dịch rò ký tự CJK | 1/8 | 1/8 |
+| **Reply sai ngôn ngữ** | **0/6** | **3/6** |
+| TTFT P50 | 91ms | 85ms |
+| Tổng sinh P50 | 1794ms | 1344ms |
+| RSS khi nạp | 2459 MB | 2008 MB |
+
+**Lý do chọn Gemma là cột "reply sai ngôn ngữ", không phải chuyện rò CJK.**
+Về rò CJK hai model hòa nhau. Nhưng quick reply tồn tại để người dùng *nói lại*
+với người đối diện — reply tiếng Việt cho một người nói tiếng Anh là vô dụng.
+Qwen sai một nửa số ca; Gemma không sai ca nào. Qwen còn có lúc trả về tiếng
+Nga (`"Конечно, hãy thảo luận thêm."`) cho đầu vào tiếng Trung.
+
+Đánh đổi: Gemma sinh chậm hơn ~33% và tốn thêm 451 MB. Nhưng **TTFT gần như
+bằng nhau**, và E2E "first useful result" phụ thuộc TTFT chứ không phải tổng
+thời gian sinh — `translation` là trường đầu tiên trong JSON, nên nó xuất hiện
+sớm bất kể phần còn lại sinh xong lúc nào.
+
+Chạy lại phép so sánh này bất cứ lúc nào:
+
+```bash
+python -m benchmarks.compare_models \
+    --model models/gemma-3-4b-it-q4_k_m.gguf \
+    --model models/qwen2.5-3b-instruct-q4_k_m.gguf
+```
+
+Đổi model **không phải đổi code**: prompt template là dữ liệu, chọn theo
+`llm.prompt_template` (`auto` suy từ tên file GGUF). Quay lại Qwen là một dòng
+trong `config.yaml`.
+
+| | Qwen2.5-3B | Gemma 3 4B |
+|---|---|---|
+| Template | ChatML | `<start_of_turn>`, **không có vai trò system** |
+| Stop token | `<\|im_end\|>` | `<end_of_turn>` |
+| Cần `--swa-full` | không | **có** |
+
+#### `--swa-full` là bắt buộc với Gemma
+
+Gemma 3 dùng sliding-window attention, và llama.cpp **không tái dùng được
+prefix cache một phần** với SWA nếu thiếu cờ này. Hệ quả: mỗi utterance phải
+xử lý lại toàn bộ system prompt.
+
+| | Xử lý prompt mỗi câu |
+|---|---|
+| không có cờ | 241 token / 610ms |
+| `--swa-full` | 15 token / 86ms |
+
+**Chênh 7 lần TTFT.** Chi phí bộ nhớ ở `n_ctx=2048` đo được là không đáng kể
+(2780 so với 2790 MB). Cờ này bật mặc định (`llm.swa_full`) và là no-op với
+model không dùng SWA — đã kiểm chứng Qwen vẫn chạy bình thường.
+
+> **Cảnh báo VRAM cho build CUDA:** +451 MB nghe nhỏ, nhưng ngân sách ở §3.1
+> tính cho Qwen và đã sát mép 5.5GB. **Bắt buộc chạy lại B4 trên phần cứng
+> NVIDIA** trước khi coi Gemma là lựa chọn chốt. Nếu vượt trần: hạ Whisper
+> xuống `base`, giảm `n_ctx`, hoặc quay lại Qwen.
+
 ### Bảy quyết định đáng biết trước khi sửa code
 
 **1. `1.5s` là ngưỡng partial, KHÔNG phải speech boundary.**
@@ -274,12 +337,6 @@ Những test đáng đọc trước khi sửa code:
 ---
 
 ## Còn chưa giải quyết
-
-**Qwen2.5-3B rò tiếng Trung vào bản dịch tiếng Việt.** Quan sát thật khi chạy
-LLM: `"Tôi nghĩ chúng ta nên推迟这次讨论目前。"`. Model 3B lượng tử hóa 4-bit
-không giữ vững ngôn ngữ đích. Đây là vấn đề model/prompt, không phải lỗi code —
-parser vẫn hoạt động đúng. Cần thử: siết prompt, thêm few-shot tiếng Việt, hoặc
-đánh giá model khác. Nên xử lý trước khi demo.
 
 Hai rủi ro chỉ mới có kế hoạch đo, chưa có lời giải kỹ thuật:
 

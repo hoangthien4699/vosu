@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..ai.copilot import IntentDone, ReplyReady, SemanticEventParser, TranslationDelta
-from ..ai.llm import GenerationStats, build_prompt
+from ..ai.llm import GenerationStats
 from ..ai.tts import PiperTts, SentenceSplitter, TtsUnavailable
 from ..audio.chunker import AudioChunker, AudioSegment
 from ..audio.session import SessionState, UtteranceState
@@ -337,7 +337,7 @@ class CopilotSession:
         parser = SemanticEventParser()
         stats = GenerationStats()
         splitter = SentenceSplitter(self.config.tts.min_sentence_chars)
-        prompt = build_prompt(transcript.text, transcript.language)
+        prompt = self.runtime.llm.build_prompt(transcript.text, transcript.language)
 
         async with self.runtime.job("llm"):
             token_stream = self.runtime.llm.stream(prompt, stats=stats)
