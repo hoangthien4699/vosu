@@ -100,6 +100,11 @@ class SileroVadBackend:
         # v5: input/state/sr ; v4: input/sr/h/c
         self._is_v5 = "state" in input_names
         self._state_dim = 128 if self._is_v5 else 64
+        # v5 giữ một "context" 64 sample của frame trước và ghép vào đầu frame
+        # hiện tại (512 + 64 = 576). Thiếu bước này model vẫn chạy và vẫn trả
+        # về số, nhưng probability luôn ~0.001 kể cả với giọng nói rõ ràng —
+        # hỏng âm thầm, không có lỗi nào được ném ra.
+        self._context_size = 64 if sample_rate == 16_000 else 32
         self.reset()
         logger.info(
             "Silero VAD đã nạp (%s, frame=%d sample)",
@@ -111,6 +116,7 @@ class SileroVadBackend:
         shape = (2, 1, self._state_dim)
         if self._is_v5:
             self._state = np.zeros(shape, dtype=np.float32)
+            self._context = np.zeros((1, self._context_size), dtype=np.float32)
         else:
             self._h = np.zeros(shape, dtype=np.float32)
             self._c = np.zeros(shape, dtype=np.float32)
@@ -119,6 +125,8 @@ class SileroVadBackend:
         x = frame.reshape(1, -1).astype(np.float32)
         sr = np.array(self.sample_rate, dtype=np.int64)
         if self._is_v5:
+            x = np.concatenate([self._context, x], axis=1)
+            self._context = x[:, -self._context_size :].copy()
             out, self._state = self._session.run(
                 None, {"input": x, "state": self._state, "sr": sr}
             )
