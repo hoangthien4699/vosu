@@ -56,6 +56,33 @@ jobs:
       - name: Kiểm tra script shell
         run: bash -n scripts/*.sh
 
+      - name: main không được chứa file riêng nhánh release
+        # Chiến lược nhánh: config.yaml và BUILD.md CHỈ tồn tại trên release và
+        # release-mac. Cherry-pick một commit có đụng chúng sẽ kéo cấu hình của
+        # một build sang main — đã xảy ra thật, và merge ngược chiều cũng vậy.
+        if: github.ref == 'refs/heads/main' || github.base_ref == 'main'
+        run: |
+          for f in config.yaml BUILD.md; do
+            if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+              echo "LỖI: $f không được nằm trên main — xem phần Nhánh trong README" >&2
+              exit 1
+            fi
+          done
+          echo "main sạch file riêng nhánh"
+
+      - name: hai nhánh release chỉ được khác nhau ở file cấu hình
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git fetch --quiet origin release release-mac || exit 0
+          diverged=$(git diff --name-only origin/release origin/release-mac \
+            | grep -E '\.(py|js|html|css)$' || true)
+          if [ -n "$diverged" ]; then
+            echo "LỖI: code đã phân kỳ giữa hai nhánh release:" >&2
+            echo "$diverged" >&2
+            exit 1
+          fi
+          echo "hai nhánh release không phân kỳ code"
+
       - name: Benchmark phải SKIP sạch khi thiếu model
         # Bắt lỗi kiểu "benchmark nổ vì thiếu dependency" — chúng phải báo
         # SKIP kèm lý do hành động được, không được ném traceback.
