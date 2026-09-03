@@ -21,7 +21,7 @@ PROMPTS = [
 
 
 async def _run(args) -> BenchmarkResult:
-    from app.ai.llm import LlmClient, build_prompt
+    from app.ai.llm import LlmClient
     from app.core.config import load_config
     from app.core.vram_manager import LlamaServerManager
 
@@ -51,11 +51,11 @@ async def _run(args) -> BenchmarkResult:
     try:
         # warm-up: lần đầu phải nạp KV cache + prompt cache
         language, text = PROMPTS[0]
-        await client.complete(build_prompt(text, language))
+        await client.complete(client.build_prompt(text, language))
 
         for i in range(runs):
             language, text = PROMPTS[i % len(PROMPTS)]
-            output, stats = await client.complete(build_prompt(text, language))
+            output, stats = await client.complete(client.build_prompt(text, language))
             if stats.ttft_ms is not None:
                 ttfts.append(stats.ttft_ms)
             totals.append(stats.total_ms)

@@ -15,6 +15,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.ai.llm import CHATML, build_prompt
 from app.ai.stt import Transcript
 from app.api.websocket import router
 from app.core.config import load_config
@@ -50,6 +51,13 @@ class FakeLlm:
     def __init__(self, output: str = LLM_OUTPUT, chunk: int = 4):
         self.output = output
         self.chunk = chunk
+        self.template = CHATML
+        self.prompts: list[str] = []
+
+    def build_prompt(self, text, language):
+        prompt = build_prompt(text, language, self.template)
+        self.prompts.append(prompt)
+        return prompt
 
     async def stream(self, prompt, *, stats=None, n_predict=None):
         for i in range(0, len(self.output), self.chunk):

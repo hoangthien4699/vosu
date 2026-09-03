@@ -27,9 +27,18 @@ fetch "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/sil
       "$MODELS/silero_vad.onnx"
 
 echo
-echo "==> Qwen2.5-3B-Instruct Q4_K_M (~2.0 GB)"
-fetch "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf" \
-      "$MODELS/qwen2.5-3b-instruct-q4_k_m.gguf"
+echo "==> Gemma 3 4B Instruct Q4_K_M (~2.3 GB)"
+fetch "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" \
+      "$MODELS/gemma-3-4b-it-q4_k_m.gguf"
+
+# Qwen2.5-3B là model gốc của đặc tả, giữ lại để đối chiếu. Bỏ qua bằng
+# VOSU_SKIP_QWEN=1 nếu không cần (tiết kiệm 2GB băng thông).
+if [[ "${VOSU_SKIP_QWEN:-0}" != "1" ]]; then
+  echo
+  echo "==> Qwen2.5-3B-Instruct Q4_K_M (~2.0 GB, để đối chiếu)"
+  fetch "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf" \
+        "$MODELS/qwen2.5-3b-instruct-q4_k_m.gguf"
+fi
 
 echo
 echo "==> Giọng Piper (VI + EN)"

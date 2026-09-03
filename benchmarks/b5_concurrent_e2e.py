@@ -25,7 +25,7 @@ from .common import BenchmarkResult, Check, Distribution, base_parser, run_cli
 
 async def _run(args) -> BenchmarkResult:
     from app.ai.copilot import SemanticEventParser
-    from app.ai.llm import GenerationStats, LlmClient, build_prompt
+    from app.ai.llm import GenerationStats, LlmClient
     from app.ai.stt import SttEngine
     from app.core.config import load_config
     from app.core.vram_manager import LlamaServerManager, query_vram
@@ -81,7 +81,7 @@ async def _run(args) -> BenchmarkResult:
             first_useful: float | None = None
 
             async for token in client.stream(
-                build_prompt(text, transcript.language), stats=stats
+                client.build_prompt(text, transcript.language), stats=stats
             ):
                 for _event in parser.feed(token):
                     if first_useful is None and parser.result.is_useful:
