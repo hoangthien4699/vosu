@@ -15,8 +15,8 @@
     <button id="pickFile" class="ghost" title="Phát một file audio thay cho micro">Phát file…</button>
     <input id="fileInput" type="file" accept="audio/*" hidden>
     <button id="pauseBtn" class="ghost" hidden>Tạm dừng</button>
-    <label id="autoPauseWrap" class="check" hidden title="Dừng sau mỗi câu, chờ xử lý xong mới phát tiếp">
-      <input id="autoPause" type="checkbox" checked> từng câu một
+    <label id="autoPauseWrap" class="check" hidden title="Dừng sau mỗi câu, nghe lại đầy đủ rồi mới phát tiếp">
+      <input id="autoPause" type="checkbox" checked> nghe lại từng câu
     </label>
     <button id="stopTts" class="ghost" disabled>Dừng đọc</button>
   </div>
@@ -30,6 +30,12 @@
       <span id="filePos">—</span>
       <span id="fileState"></span>
     </div>
+    <ol id="reviewSteps" class="steps" hidden>
+      <li data-step="original">Âm thanh gốc</li>
+      <li data-step="translation">Bản dịch</li>
+      <li data-step="intent">Hàm ý</li>
+      <li data-step="replies">Gợi ý trả lời</li>
+    </ol>
   </section>
 
   <section class="panel">

@@ -53,6 +53,9 @@ class SttFinalData(_Strict):
     language: str | None = None
     duration_s: float = Field(ge=0.0)
     latency_ms: float = Field(ge=0.0)
+    #: Vị trí bắt đầu câu, tính bằng giây kể từ byte audio đầu tiên của phiên.
+    #: Client đếm cùng một dòng byte nên cắt được đúng đoạn audio GỐC của câu.
+    start_s: float = Field(default=0.0, ge=0.0)
 
 
 class CopilotStartedData(_Strict):
@@ -81,6 +84,8 @@ class IntentDoneData(_Strict):
 class ReplyReadyData(_Strict):
     index: int = Field(ge=0)
     text: str
+    #: Vì sao người dùng có thể chọn câu này. Rỗng nếu llm.reply_purpose tắt.
+    purpose: str = ""
 
 
 class TtsStartedData(_Strict):
@@ -198,6 +203,14 @@ class CopilotOutput(_Strict):
 
 
 class ClientControl(_Strict):
-    action: Literal["speak_reply", "cancel_tts", "reset", "ping"]
+    action: Literal["speak_reply", "speak", "set_tts_mode", "cancel_tts", "reset", "ping"]
     reply_index: int | None = None
     text: str | None = None
+    #: `speak`: đọc phần nào (đổi giọng và gắn nhãn cho đúng)
+    field: Literal["translation", "intent", "reply"] | None = None
+    #: `speak`: ép dùng giọng cụ thể ("vi" hoặc "en"). None = theo config.
+    voice: Literal["vi", "en"] | None = None
+    #: `set_tts_mode`: "auto" = server tự đọc translation (mặc định, §2.4.1);
+    #: "manual" = server không tự đọc gì, client tự yêu cầu từng phần theo
+    #: thứ tự mình muốn. Dùng cho chế độ nghe lại từng câu.
+    mode: Literal["auto", "manual"] | None = None
