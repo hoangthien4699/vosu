@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.ai.llm import CHATML, GEMMA, SYSTEM_PROMPT, build_prompt, resolve_template
+from app.ai.direction import Direction
+from app.ai.llm import CHATML, GEMMA, build_prompt, resolve_template, system_prompt
 from app.core.config import load_config
 
 
@@ -16,7 +17,7 @@ def test_chatml_dung_dinh_dang_cua_qwen():
     assert prompt.startswith("<|im_start|>system\n")
     assert "<|im_start|>user\n" in prompt
     assert prompt.endswith("<|im_start|>assistant\n")
-    assert SYSTEM_PROMPT in prompt
+    assert "live interpreter" in prompt
     assert "Hello there." in prompt
 
 
@@ -26,7 +27,7 @@ def test_gemma_gop_system_vao_luot_user():
     assert prompt.startswith("<start_of_turn>user\n")
     assert prompt.endswith("<start_of_turn>model\n")
     assert "system" not in prompt.split("\n")[0]
-    assert SYSTEM_PROMPT in prompt
+    assert "live interpreter" in prompt
     assert "Hello there." in prompt
 
 
@@ -93,44 +94,92 @@ def test_prompt_template_dat_duoc_qua_bien_moi_truong():
 # Ràng buộc JSON Schema
 # --------------------------------------------------------------------------- #
 
-def test_schema_ep_dung_hai_reply():
-    from app.ai.llm import response_schema
+def test_grammar_cam_ky_tu_cau_truc_trong_chuoi():
+    """JSON Schema chỉ kiểm soát CẤU TRÚC, không kiểm soát nội dung chuỗi.
 
-    schema = response_schema(with_meaning=True)
-    replies = schema["properties"]["replies"]
-    assert replies["minItems"] == replies["maxItems"] == 2, (
-        "không ép đúng 2 reply thì model sẽ sinh 1 — đã quan sát thật"
-    )
-    assert replies["items"]["required"] == ["text", "meaning"]
-
-
-def test_translation_dung_dau_trong_schema():
-    """Thứ tự properties quyết định thứ tự sinh khi có grammar.
-
-    `translation` phải đầu tiên: đó là thứ quyết định "first useful result"
-    của §7. Đảo thứ tự là E2E tụt mà không có test nào đỏ.
+    `{`, `}` và dấu ngoặc kép cong đều hợp lệ bên trong chuỗi JSON, nên model
+    viết `”}` giữa chuỗi rồi lảm nhảm tiếp mà JSON vẫn "hợp lệ". Đo với prompt
+    có lịch sử: json_schema 0/6 sạch, GBNF 6/6.
     """
-    from app.ai.llm import response_schema
+    from app.ai.llm import response_grammar
 
-    for with_meaning in (True, False):
-        keys = list(response_schema(with_meaning)["properties"])
-        assert keys[0] == "translation", keys
-
-
-def test_schema_khong_meaning_thi_reply_la_chuoi():
-    from app.ai.llm import response_schema
-
-    assert response_schema(with_meaning=False)["properties"]["replies"]["items"] == {
-        "type": "string"
-    }
+    grammar = response_grammar()
+    assert "translation" in grammar
+    # Lớp ký tự của `char` phải loại trừ mọi ký tự cấu trúc và ngoặc kép cong.
+    char_rule = next(ln for ln in grammar.splitlines() if ln.startswith("char"))
+    for forbidden in ("{", "}", "[", "]", "u201C", "u201D"):
+        assert forbidden in char_rule, f"grammar không cấm {forbidden!r}: {char_rule}"
 
 
-def test_payload_gui_kem_json_schema():
+def test_payload_gui_kem_grammar():
     """Bật cờ mà không gửi lên server thì grammar vô tác dụng."""
     import inspect
 
     from app.ai.llm import LlmClient
 
     source = inspect.getsource(LlmClient.stream)
-    assert 'payload["json_schema"]' in source
-    assert "cfg.json_schema" in source
+    assert 'payload["grammar"]' in source
+    assert "cfg.grammar" in source
+
+
+# --------------------------------------------------------------------------- #
+# Prompt theo chiều dịch
+# --------------------------------------------------------------------------- #
+
+def test_chieu_thuan_dich_sang_tieng_nguoi_dung():
+    prompt = system_prompt(Direction.TO_USER, user_language="vi")
+    assert "into Vietnamese" in prompt
+    assert "USER just spoke" not in prompt
+
+
+def test_chieu_nguoc_dich_sang_tieng_doi_phuong():
+    prompt = system_prompt(
+        Direction.TO_COUNTERPART, user_language="vi", counterpart_language="en"
+    )
+    assert "spoke in Vietnamese" in prompt
+    assert "into English" in prompt
+    assert "say it out loud" in prompt
+
+
+def test_chieu_nguoc_theo_dung_tieng_doi_phuong_that():
+    """Đích lấy theo ngôn ngữ nghe được, không cứng là tiếng Anh."""
+    prompt = system_prompt(
+        Direction.TO_COUNTERPART, user_language="vi", counterpart_language="ja"
+    )
+    assert "into Japanese" in prompt
+
+
+def test_prompt_danh_dau_ai_dang_noi():
+    to_user = build_prompt("Hello.", "en", GEMMA, direction=Direction.TO_USER)
+    to_them = build_prompt("Xin chào.", "vi", GEMMA, direction=Direction.TO_COUNTERPART)
+    assert "Now Them said:" in to_user
+    assert "Now You said:" in to_them
+
+
+def test_lich_su_nam_trong_system_prompt_de_giu_prefix_cache():
+    """Lịch sử phải ở cuối system prompt, TRƯỚC câu hiện tại.
+
+    Đặt sau câu hiện tại thì mỗi lượt tiền tố đều đổi và prefix cache vô dụng —
+    đo được: 15 token/86ms so với 241 token/610ms.
+    """
+    prompt = build_prompt(
+        "Now what?", "en", GEMMA,
+        direction=Direction.TO_USER,
+        history='Them: "Chúng ta nên hoãn lại."',
+    )
+    assert prompt.index("Chúng ta nên hoãn lại") < prompt.index("Now Them said:")
+
+
+def test_khong_co_lich_su_thi_khong_co_khoi_context():
+    prompt = build_prompt("Hello.", "en", GEMMA)
+    assert "Earlier in this conversation" not in prompt
+
+
+def test_ten_ngon_ngu_dich_sang_tieng_anh_cho_model_hieu():
+    from app.ai.llm import language_name
+
+    assert language_name("vi") == "Vietnamese"
+    assert language_name("en-US") == "English"
+    assert language_name("ja") == "Japanese"
+    assert language_name(None) == "English"
+    assert language_name("xx") == "xx"      # không biết thì giữ nguyên mã

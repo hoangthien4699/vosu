@@ -3,8 +3,9 @@
 Đặc tả §4.3: event thiếu `session_id`/`utterance_id`/`sequence`/`timestamp`
 phải bị reject ở tầng validate — không để lọt ra WebSocket.
 
-Đặc tả §4.4: output LLM rút gọn — KHÔNG có trường `meaning` cho từng reply
-(mỗi reply thêm bản dịch sẽ tăng token → tăng latency).
+Output LLM giờ chỉ còn MỘT trường `translation`. Cả `intent` (§4.4) lẫn
+`replies` đều đã bỏ: máy không nghĩ hộ câu trả lời nữa, người dùng tự nói bằng
+tiếng mình và máy dịch sang tiếng đối phương để họ nói theo.
 """
 
 from __future__ import annotations
@@ -51,6 +52,9 @@ class SttPartialData(_Strict):
 class SttFinalData(_Strict):
     text: str
     language: str | None = None
+    #: "to_user" = đối phương nói, dịch sang tiếng người dùng.
+    #: "to_counterpart" = người dùng nói, dịch sang tiếng đối phương và đọc chậm.
+    direction: Literal["to_user", "to_counterpart"] = "to_user"
     duration_s: float = Field(ge=0.0)
     latency_ms: float = Field(ge=0.0)
     #: Vị trí bắt đầu câu, tính bằng giây kể từ byte audio đầu tiên của phiên.
@@ -61,6 +65,7 @@ class SttFinalData(_Strict):
 class CopilotStartedData(_Strict):
     source_text: str
     language: str | None = None
+    direction: Literal["to_user", "to_counterpart"] = "to_user"
 
 
 class CopilotDoneData(_Strict):
@@ -75,17 +80,13 @@ class TranslationDeltaData(_Strict):
 
     text: str
     full: str
-
-
-class ReplyReadyData(_Strict):
-    index: int = Field(ge=0)
-    text: str
-    #: Bản dịch tiếng Việt của `text`. Rỗng nếu llm.reply_meaning tắt.
-    meaning: str = ""
+    direction: Literal["to_user", "to_counterpart"] = "to_user"
+    #: Ngôn ngữ của chính bản dịch này — client cần để chọn giọng đọc.
+    language: str = "vi"
 
 
 class TtsStartedData(_Strict):
-    utterance_field: Literal["translation", "reply"]
+    utterance_field: Literal["translation", "coach"]
     text: str
     voice: str
     sample_rate: int
@@ -131,7 +132,6 @@ PAYLOAD_SCHEMAS: dict[EventType, type[BaseModel]] = {
     EventType.COPILOT_STARTED: CopilotStartedData,
     EventType.COPILOT_DONE: CopilotDoneData,
     EventType.TRANSLATION_DELTA: TranslationDeltaData,
-    EventType.REPLY_READY: ReplyReadyData,
     EventType.TTS_STARTED: TtsStartedData,
     EventType.TTS_AUDIO_CHUNK: TtsAudioChunkData,
     EventType.TTS_DONE: TtsDoneData,
@@ -188,7 +188,6 @@ def validate_event(event: Event) -> dict[str, Any]:
 
 class CopilotOutput(_Strict):
     translation: str = ""
-    replies: list[str] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -197,11 +196,10 @@ class CopilotOutput(_Strict):
 
 
 class ClientControl(_Strict):
-    action: Literal["speak_reply", "speak", "set_tts_mode", "cancel_tts", "reset", "ping"]
-    reply_index: int | None = None
+    action: Literal["speak", "set_tts_mode", "cancel_tts", "reset", "ping"]
     text: str | None = None
     #: `speak`: đọc phần nào (đổi giọng và gắn nhãn cho đúng)
-    field: Literal["translation", "reply"] | None = None
+    field: Literal["translation", "coach"] | None = None
     #: `speak`: ép dùng giọng cụ thể ("vi" hoặc "en"). None = theo config.
     voice: Literal["vi", "en"] | None = None
     #: `set_tts_mode`: "auto" = server tự đọc translation (mặc định, §2.4.1);

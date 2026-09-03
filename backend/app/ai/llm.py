@@ -18,87 +18,88 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from .direction import Direction
+
 logger = logging.getLogger(__name__)
 
-_BASE_RULES = """You are a real-time copilot for a user wearing earbuds.
-Someone is speaking TO the user in a foreign language. Help the user understand
-what was said, and give the user something to say back.
+#: Ngôn ngữ đích, viết bằng tiếng Anh cho model hiểu. Chỉ để dựng prompt.
+_LANGUAGE_NAMES = {
+    "vi": "Vietnamese", "en": "English", "ja": "Japanese", "zh": "Chinese",
+    "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish",
+    "th": "Thai", "id": "Indonesian", "ru": "Russian",
+}
 
-Output ONE compact JSON object and nothing else. No markdown, no code fence.
-{schema}
 
-LANGUAGE RULES — these matter more than anything else:
-- "translation": the speech rendered in VIETNAMESE. Every word Vietnamese with
-  proper diacritics. Never leave words in the source language. Never use
-  Chinese characters.
-- reply text: what the USER SAYS BACK to the speaker. The speaker does not
-  understand Vietnamese, so it MUST be in the SAME LANGUAGE THE SPEAKER USED —
-  English speech gets English replies, Japanese gets Japanese. Vietnamese ONLY
-  if the speaker spoke Vietnamese.
-  Exactly 2 replies, each under 15 words, meaningfully different.
-{extra_rule}
-Example — the speaker said, in English: "We need more time."
-{example}
+def language_name(code: str | None) -> str:
+    if not code:
+        return "English"
+    return _LANGUAGE_NAMES.get(code.strip().lower().split("-")[0], code)
 
-Output the JSON immediately. Do not explain."""
+
+_TO_USER = """You are a live interpreter for a user wearing earbuds.
+Someone is speaking TO the user in a foreign language. Translate what they said
+into {target}.
+
+Output ONE compact JSON object and nothing else:
+{{"translation":"..."}}
+
+Rules:
+- Write the translation entirely in {target}, with correct spelling and
+  diacritics. Never leave words in the source language, and never mix in
+  characters from a script {target} does not use.
+- Natural spoken {target}, not word-for-word.
+- Translate EVERYTHING they said, including short opening remarks. Do not drop
+  a sentence or summarise.
+- Translate only. Do not answer, explain, or add commentary.{history}"""
+
+_TO_COUNTERPART = """You are a live interpreter for a user wearing earbuds.
+The USER just spoke in {source}. The person they are talking to does not
+understand {source}. Translate what the user said into {target}, so the user
+can say it out loud.
+
+Output ONE compact JSON object and nothing else:
+{{"translation":"..."}}
+
+Rules:
+- Write the translation entirely in {target}.
+- Natural spoken {target} that sounds right said out loud in a real
+  conversation — not stiff or literal, not written prose.
+- Keep it about as long as what the user said. Do not add ideas they did not
+  say.
+- Translate only. Do not answer, explain, or add commentary.{history}"""
 
 _HISTORY_RULE = """
-Earlier in this conversation (oldest first). "Them" is the speaker, "You" is
-what the user already said back. Use it to resolve pronouns like "it" or "that
-one", to keep the thread, and to avoid suggesting a reply the user already
-used. Only the last line below is being asked about — everything above it is
-context.
 
-{history}
-"""
+Earlier in this conversation (oldest first). "Them" is the other person, "You"
+is the user. Use it to resolve pronouns like "it" or "that one" and to keep the
+thread. Only the line after "Now" is being asked about.
 
-_PLAIN_SCHEMA = '{"translation":"...","replies":["...","..."]}'
-_PLAIN_EXAMPLE = (
-    '{"translation":"Chúng tôi cần thêm thời gian.",'
-    '"replies":["How much more time do you need?",'
-    '"That\'s fine, take the time you need."]}'
-)
-
-_MEANING_SCHEMA = (
-    '{"translation":"...",'
-    '"replies":[{"text":"...","meaning":"..."},{"text":"...","meaning":"..."}]}'
-)
-_MEANING_RULE = """- "meaning": the Vietnamese translation of "text" right next to it, so the
-  user knows what they are about to say. ALWAYS VIETNAMESE, even though "text"
-  is English or Japanese — "text" is for the speaker, "meaning" is for the
-  user. Translate faithfully; do not add commentary and do not explain why.
-"""
-_MEANING_EXAMPLE = (
-    '{"translation":"Chúng tôi cần thêm thời gian.",'
-    '"replies":[{"text":"How much more time do you need?",'
-    '"meaning":"Anh cần thêm bao nhiêu thời gian nữa?"},'
-    '{"text":"That\'s fine, take the time you need.",'
-    '"meaning":"Không sao, cứ thong thả làm cho xong."}]}'
-)
+{history}"""
 
 
-def system_prompt(with_meaning: bool = True) -> str:
-    """Prompt hệ thống. `with_meaning` thêm bản dịch tiếng Việt cho từng reply.
+def system_prompt(
+    direction: Direction = Direction.TO_USER,
+    *,
+    user_language: str = "vi",
+    counterpart_language: str | None = "en",
+    history: str = "",
+) -> str:
+    """Prompt hệ thống theo chiều dịch.
 
-    Đây CHÍNH LÀ trường `meaning` mà §4.4 đã bỏ đi ("mỗi reply thêm bản dịch sẽ
-    làm tăng token → tăng latency"). Đưa lại theo yêu cầu sản phẩm: người dùng
-    là người Việt, câu gợi ý là tiếng Anh — không biết mình sắp nói gì thì
-    không chọn được.
+    Output rút gọn còn đúng một trường `translation`. Gợi ý trả lời đã được BỎ:
+    sản phẩm đổi mô hình — thay vì máy nghĩ hộ câu trả lời, người dùng tự nói
+    bằng tiếng Việt và máy dịch sang tiếng đối phương để họ nói theo.
 
-    Chi phí đã đo, xem `core/config.py::LlmConfig.reply_meaning`. Tắt được nếu
-    ưu tiên tốc độ.
+    Hệ quả tốt cho latency: output từ ~110 token xuống ~25 token.
     """
-    if with_meaning:
-        return _BASE_RULES.format(
-            schema=_MEANING_SCHEMA, extra_rule=_MEANING_RULE, example=_MEANING_EXAMPLE
+    context = _HISTORY_RULE.format(history=history.strip()) if history.strip() else ""
+    if direction is Direction.TO_COUNTERPART:
+        return _TO_COUNTERPART.format(
+            source=language_name(user_language),
+            target=language_name(counterpart_language),
+            history=context,
         )
-    return _BASE_RULES.format(
-        schema=_PLAIN_SCHEMA, extra_rule="", example=_PLAIN_EXAMPLE
-    )
-
-
-#: Giữ tên cũ cho test và mã gọi sẵn có.
-SYSTEM_PROMPT = system_prompt(with_meaning=False)
+    return _TO_USER.format(target=language_name(user_language), history=context)
 
 
 # --------------------------------------------------------------------------- #
@@ -184,48 +185,31 @@ def resolve_template(config) -> PromptTemplate:
     return CHATML
 
 
-def response_schema(with_meaning: bool = True) -> dict:
-    """JSON Schema ràng buộc output của LLM (llama.cpp dịch thành GBNF grammar).
+#: Grammar GBNF ràng buộc output. Dùng thay `json_schema` vì JSON Schema KHÔNG
+#: kiểm soát được nội dung BÊN TRONG chuỗi.
+#:
+#: `{`, `}`, `[`, `]` và dấu ngoặc kép cong là ký tự hợp lệ trong chuỗi JSON,
+#: nên json_schema cho phép model viết `”}` giữa chuỗi rồi lảm nhảm tiếp. Nó
+#: "tưởng" đã đóng JSON trong khi grammar thì chưa.
+#:
+#: Đo thật (Gemma 3 4B, prompt CÓ lịch sử hội thoại, 6 câu):
+#:      json_schema   0/6 sạch
+#:      GBNF          6/6 sạch
+#:
+#: Không có lịch sử thì json_schema cũng sạch — lịch sử chứa nhiều chuỗi trong
+#: ngoặc kép nên nó mồi cho model sinh đúng cái mẫu gây lỗi. Test không có lịch
+#: sử sẽ cho kết quả sạch GIẢ.
+RESPONSE_GRAMMAR = r"""
+root   ::= "{" ws "\"translation\"" ws ":" ws string ws "}"
+string ::= "\"" char* "\""
+char   ::= [^"\\{}\[\]\u201C\u201D] | "\\" ["\\/bfnrt]
+ws     ::= [ \t\n]*
+"""
 
-    KHÔNG phải tối ưu hóa — là điều kiện để tính năng chạy được. Đo trên
-    Gemma 3 4B với schema có `meaning`, 5 câu:
 
-                        không grammar   có json_schema
-        JSON hợp lệ          0/5             5/5
-        đủ 2 reply           0/5             5/5
-        bọc markdown         5/5             0/5
-        trung vị          2954ms          3714ms  (+26%)
-
-    Không ràng buộc thì model gộp cả hai reply vào MỘT object với khóa trùng
-    nên parser ghi đè và chỉ còn một reply; và nó bọc markdown fence dù prompt
-    cấm rõ.
-
-    Thứ tự `properties` quyết định thứ tự sinh: `translation` phải đứng đầu để
-    streaming có thứ hiển thị sớm nhất (§7 — first useful result).
-    """
-    reply_item: dict
-    if with_meaning:
-        reply_item = {
-            "type": "object",
-            "properties": {"text": {"type": "string"}, "meaning": {"type": "string"}},
-            "required": ["text", "meaning"],
-        }
-    else:
-        reply_item = {"type": "string"}
-
-    return {
-        "type": "object",
-        "properties": {
-            "translation": {"type": "string"},
-            "replies": {
-                "type": "array",
-                "minItems": 2,
-                "maxItems": 2,
-                "items": reply_item,
-            },
-        },
-        "required": ["translation", "replies"],
-    }
+def response_grammar() -> str:
+    """Grammar cho output. Xem chú thích ở RESPONSE_GRAMMAR."""
+    return RESPONSE_GRAMMAR
 
 
 def build_prompt(
@@ -233,25 +217,28 @@ def build_prompt(
     language: str | None,
     template: PromptTemplate = CHATML,
     *,
-    with_meaning: bool = False,
+    direction: Direction = Direction.TO_USER,
+    user_language: str = "vi",
+    counterpart_language: str | None = "en",
     history: str = "",
 ) -> str:
-    """Dựng prompt. `history` là các lượt trước, đã render sẵn.
+    """Dựng prompt. Thứ tự các phần quyết định hiệu quả prefix cache:
 
-    Thứ tự các phần quyết định hiệu quả prefix cache:
+        [system prompt + lịch sử]        [câu hiện tại]
+         chỉ mọc thêm ở cuối              đổi mỗi lượt
 
-        [system prompt]  [lịch sử]  [câu hiện tại]
-         cố định          chỉ mọc     đổi mỗi lượt
-                          thêm cuối
-
-    Lịch sử chỉ nối thêm ở cuối nên tiền tố của lượt trước vẫn dùng lại được;
-    chỉ phần mới cộng câu hiện tại phải xử lý lại. Đặt lịch sử SAU câu hiện tại
-    hoặc chèn vào giữa system prompt sẽ phá cache và đẩy TTFT lên nhiều lần.
+    Lịch sử nằm cuối system prompt và chỉ nối thêm, nên tiền tố của lượt trước
+    vẫn dùng lại được; chỉ phần mới cộng câu hiện tại phải xử lý lại.
     """
-    lang = language or "unknown"
-    context = _HISTORY_RULE.format(history=history.strip()) if history.strip() else ""
-    user = f'{context}\nNow they said:\nLanguage: {lang}\nSpeech: "{text}"'
-    return template.render(system_prompt(with_meaning), user.strip())
+    system = system_prompt(
+        direction,
+        user_language=user_language,
+        counterpart_language=counterpart_language,
+        history=history,
+    )
+    speaker = "You" if direction is Direction.TO_COUNTERPART else "Them"
+    user = f'Now {speaker} said:\n{text}'
+    return template.render(system, user)
 
 
 @dataclass
@@ -279,12 +266,23 @@ class LlmClient:
         )
 
     def build_prompt(
-        self, text: str, language: str | None, history: str = ""
+        self,
+        text: str,
+        language: str | None,
+        *,
+        direction: Direction = Direction.TO_USER,
+        counterpart_language: str | None = None,
+        history: str = "",
     ) -> str:
-        """Prompt đúng định dạng của model đang nạp."""
+        """Prompt đúng định dạng của model đang nạp và đúng chiều dịch."""
+        session = self._config.session
         return build_prompt(
-            text, language, self.template,
-            with_meaning=self._config.llm.reply_meaning,
+            text,
+            language,
+            self.template,
+            direction=direction,
+            user_language=session.user_language,
+            counterpart_language=counterpart_language or session.counterpart_language,
             history=history,
         )
 
@@ -332,6 +330,7 @@ class LlmClient:
             "prompt": prompt,
             "temperature": cfg.temperature,
             "top_p": cfg.top_p,
+            "repeat_penalty": cfg.repeat_penalty,
             "n_predict": n_predict if n_predict is not None else cfg.n_predict,
             "stream": True,
             "cache_prompt": True,
@@ -339,9 +338,9 @@ class LlmClient:
             # chạy tới hết n_predict và JSON bị cắt cụt.
             "stop": list(self.template.stop),
         }
-        if cfg.json_schema:
-            # Bắt buộc khi reply_meaning bật — xem response_schema().
-            payload["json_schema"] = response_schema(cfg.reply_meaning)
+        if cfg.grammar:
+            # GBNF chứ không phải json_schema — xem RESPONSE_GRAMMAR.
+            payload["grammar"] = response_grammar()
 
         started = time.perf_counter()
         chunks: list[str] = []

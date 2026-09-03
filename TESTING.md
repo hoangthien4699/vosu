@@ -82,17 +82,25 @@ sau khi câu đó xử lý xong hoàn toàn — nghĩa là LLM sinh xong **và**
 lượt TTS nào đang đọc. Chờ mỗi `copilot_done` là chưa đủ: một bản dịch nhiều
 câu sẽ có nhiều lượt `tts_started`/`tts_done`.
 
-Với mỗi câu, hệ thống phát lại **bốn bước theo thứ tự**:
+Với mỗi câu, hệ thống phát lại **hai bước theo thứ tự**:
 
 | | Nghe gì | Giọng |
 |---|---|---|
-| 1 | **Âm thanh gốc** — cắt đúng đoạn của câu đó từ chính file bạn chọn | (file gốc) |
-| 2 | **Bản dịch** | tiếng Việt |
-| 3 | **Gợi ý trả lời**: *"Có hai lựa chọn cho bạn. Một là: … Nghĩa là: … Hai là: …"* | xen kẽ |
+| 1 | **Âm thanh gốc** — cắt đúng đoạn của câu đó từ chính file bạn chọn | file gốc |
+| 2 | **Bản dịch** | tuỳ chiều |
 
-Bước 3 đổi giọng theo từng đoạn: khung dẫn và mục đích đọc giọng Việt, còn câu
-gợi ý đọc giọng **Anh** — đó là ngôn ngữ bạn sẽ nói ra. Một giọng đọc cả hai
-thì phần tiếng Anh nghe rất khó hiểu.
+Chiều dịch suy từ ngôn ngữ Whisper nhận diện, không cần bấm nút:
+
+| Ai nói | Làm gì | Giọng đọc |
+|---|---|---|
+| **Đối phương** (tiếng Anh…) | dịch sang tiếng Việt để bạn **hiểu** | Việt, tốc độ thường |
+| **Bạn** (tiếng Việt) | dịch sang tiếng đối phương để bạn **nói theo** | Anh, **đọc chậm** |
+
+Ngôn ngữ đối phương lấy theo thực tế nghe được, không cứng là tiếng Anh — họ
+nói tiếng Nhật thì chiều ngược dịch sang tiếng Nhật.
+
+Câu ngắn ("Yes.", "Ừ.") thì Whisper hay nhận nhầm ngôn ngữ, nên khi không chắc
+hệ thống **giữ chiều của lượt trước** thay vì đoán bừa.
 
 Client cắt được đúng đoạn audio gốc nhờ trường `start_s` trong `stt_final`:
 server đếm vị trí câu trên chính dòng byte mà client gửi, nên hai bên khớp
@@ -106,21 +114,15 @@ sẽ phát *trước cả* âm thanh gốc, vì streaming TTS bắt đầu ngay 
 Nút **"Tạm dừng"** cho bạn kiểm soát tay bất cứ lúc nào. Bấm "Tiếp tục" sẽ hủy
 chuỗi nghe lại đang dở và phát tiếp ngay.
 
-Thời lượng thực tế mỗi câu: khoảng **17 giây** (3s bản dịch + 14s gợi ý trả
-lời qua 5 đoạn TTS).
+Tốc độ đọc chiều ngược chỉnh bằng `tts.coach_length_scale` (mặc định 1.35 —
+số càng lớn càng chậm).
 
-> **Chi phí của trường "nghĩa là".** Đây chính là trường `meaning` mà §4.4 đã
-> bỏ đi ("mỗi reply thêm bản dịch sẽ làm tăng token → tăng latency"). Đưa lại
-> vì người dùng là người Việt, câu gợi ý là tiếng Anh — không biết mình sắp
-> nói gì thì không chọn được. Đo trên Gemma 3 4B / M4: first-useful-result
-> 182ms → 272ms, tổng thời gian sinh 1744ms → 3001ms. Tắt bằng
-> `llm.reply_meaning: false` nếu ưu tiên tốc độ cho hội thoại trực tiếp.
 
-> **`json_schema` là bắt buộc, không phải tối ưu hóa.** Không ràng buộc grammar
-> thì Gemma 3 4B gộp cả hai reply vào một object với khóa trùng lặp và bọc
-> markdown fence — **0/5 câu ra JSON hợp lệ**. Có `json_schema`: **5/5**, đủ 2
-> reply mọi lần. Đổi lại tổng thời gian sinh tăng ~26%. Bật mặc định qua
-> `llm.json_schema`.
+> **GBNF grammar là bắt buộc, không phải tối ưu hóa.** JSON Schema chỉ kiểm
+> soát *cấu trúc*, không cấm được `}` hay dấu ngoặc kép cong **bên trong**
+> chuỗi — model viết `”}` giữa chuỗi rồi lảm nhảm tiếp mà JSON vẫn "hợp lệ".
+> Đo với prompt có lịch sử hội thoại, 6 câu: `json_schema` **0/6 sạch**, GBNF
+> **6/6**. Bật mặc định qua `llm.grammar`.
 
 Tạm dừng an toàn nhờ một tính chất của kiến trúc: **VAD phía server chạy theo
 frame, không theo đồng hồ thực**. Ngừng gửi audio thì trạng thái VAD đóng băng
@@ -146,7 +148,6 @@ Hoặc bấm **"Dừng đọc"** để thử đường `client_request`.
 |---|---|
 | **Đang nghe** | transcript tạm (xám nghiêng) rồi transcript cuối |
 | **Bản dịch** | hiện dần theo từng ký tự — đây là `translation_delta` |
-| **Gợi ý trả lời** | **bấm vào để nghe đọc** — đúng ngôn ngữ người đối diện dùng |
 | **Chỉ số** | E2E, TTFT, STT, Barge-in — đo trực tiếp |
 | **Nhật ký** | semantic event thô, để debug |
 

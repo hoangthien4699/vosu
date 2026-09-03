@@ -6,7 +6,7 @@
  *   G3 — phát TTS, và DỪNG NGAY khi nhận `tts_cancelled` (Barge-in, §2.4.1)
  *
  * Client cố ý KHÔNG biết gì về cấu trúc JSON của LLM. Nó chỉ hiểu các event
- * ngữ nghĩa: translation_delta / reply_ready (§4.4).
+ * ngữ nghĩa: translation_delta (§4.4).
  */
 
 const TARGET_SR = 16000;
@@ -17,7 +17,8 @@ const ui = {
   status: el("status"), toggle: el("toggle"), stopTts: el("stopTts"),
   utteranceId: el("utteranceId"), partial: el("partial"), final: el("final"),
   lang: el("lang"), sttLatency: el("sttLatency"),
-  translation: el("translation"), replies: el("replies"),
+  translation: el("translation"), translationTitle: el("translationTitle"),
+  coachHint: el("coachHint"),
   log: el("log"), pickFile: el("pickFile"), fileInput: el("fileInput"),
   pauseBtn: el("pauseBtn"), autoPause: el("autoPause"),
   autoPauseWrap: el("autoPauseWrap"), filePanel: el("filePanel"),
@@ -37,7 +38,6 @@ const state = {
   firstUseful: null,
   e2eSamples: [],
   utterances: 0,
-  replies: [],
   file: null,        // bộ phát file, xem streamFile()
   ttsEnabled: true,  // server báo qua session_started
   utt: null,         // dữ liệu câu đang xử lý, gom để nghe lại
@@ -226,6 +226,7 @@ function onEvent(event) {
       ui.partial.textContent = "…";
       ui.final.textContent = data.text;
       ui.utteranceId.textContent = uttId;
+      applyDirection(data.direction);
       ui.lang.textContent = data.language ? `ngôn ngữ: ${data.language}` : "";
       ui.sttLatency.textContent = `STT ${ms(data.latency_ms)}`;
       ui.mStt.textContent = ms(data.latency_ms);
@@ -237,8 +238,8 @@ function onEvent(event) {
         startS: data.start_s ?? 0,
         durationS: data.duration_s ?? 0,
         source: data.text,
+        direction: data.direction || "to_user",
         translation: "",
-        replies: [],
       };
       beginUtteranceHold();
       updateFileUi();
@@ -247,22 +248,16 @@ function onEvent(event) {
 
     case "copilot_started":
       ui.translation.textContent = "";
-      ui.replies.innerHTML = "";
-      state.replies = [];
       break;
 
     case "translation_delta":
       ui.translation.textContent = data.full;
+      applyDirection(data.direction);
       if (state.utt) state.utt.translation = data.full;
       markUseful();
       break;
 
 
-    case "reply_ready":
-      addReply(data.index, data.text, data.meaning || "");
-      if (state.utt) state.utt.replies[data.index] = { text: data.text, meaning: data.meaning || "" };
-      markUseful();
-      break;
 
     case "copilot_done":
       ui.mTtft.textContent = ms(data.ttft_ms);
@@ -307,6 +302,17 @@ function onEvent(event) {
   }
 }
 
+/* Hai chiều: đối phương nói -> đây là bản dịch để HIỂU;
+ * bạn nói -> đây là câu tiếng đối phương để NÓI THEO.
+ * Nhãn phải đổi, nếu không người dùng không biết mình đang nhìn cái gì.     */
+function applyDirection(direction) {
+  if (!direction) return;
+  const outbound = direction === "to_counterpart";
+  ui.translationTitle.textContent = outbound ? "Bạn nói — hãy đọc theo" : "Bản dịch";
+  ui.coachHint.hidden = !outbound;
+  ui.translation.classList.toggle("coach", outbound);
+}
+
 function markUseful() {
   if (state.firstUseful !== null || state.endpointAt === null) return;
   state.firstUseful = performance.now();
@@ -316,28 +322,6 @@ function markUseful() {
   ui.mE2eP95.textContent = ms(percentile(state.e2eSamples, 95));
 }
 
-function addReply(index, text, meaning) {
-  state.replies[index] = text;
-  const item = document.createElement("li");
-  const idx = document.createElement("span");
-  idx.className = "idx";
-  idx.textContent = `${index + 1}.`;
-  item.append(idx, document.createTextNode(text));
-  if (meaning) {
-    const vi = document.createElement("span");
-    vi.className = "meaning";
-    vi.textContent = `nghĩa là: ${meaning}`;
-    item.append(vi);
-  }
-  item.title = "Bấm để đọc qua tai nghe";
-  // §2.4.1 MVP scope: quick reply CHỈ đọc khi người dùng chọn thủ công.
-  item.onclick = () => {
-    if (state.ws?.readyState === WebSocket.OPEN) {
-      state.ws.send(JSON.stringify({ action: "speak_reply", reply_index: index, text }));
-    }
-  };
-  ui.replies.append(item);
-}
 
 /* ------------------------------ kết nối ------------------------------- */
 
@@ -530,49 +514,16 @@ function playOriginal(startS, durationS) {
   });
 }
 
-function speakAndWait(text, field, voice) {
+function speakAndWait(text, field) {
   if (!text?.trim() || state.ws?.readyState !== WebSocket.OPEN) return Promise.resolve();
   return new Promise((resolve) => {
     state.ttsWaiter = resolve;
-    state.ws.send(JSON.stringify({ action: "speak", text, field, voice }));
+    state.ws.send(JSON.stringify({ action: "speak", text, field }));
     // Không để treo vĩnh viễn nếu TTS hỏng mà không phát event nào.
     setTimeout(() => {
       if (state.ttsWaiter === resolve) { state.ttsWaiter = null; resolve(); }
     }, 30000);
   });
-}
-
-/* Ngôn ngữ của câu gợi ý = ngôn ngữ người nói. Suy từ chính chữ: có dấu tiếng
- * Việt thì đọc giọng Việt, không thì giọng Anh. Thô sơ nhưng đủ cho hai giọng
- * đang có, và không cần thêm vòng gọi model nào. */
-const VIET_MARKS = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
-const voiceFor = (text) => (VIET_MARKS.test(text) ? "vi" : "en");
-const endPunctuated = (text) => (/[.!?…]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
-
-function buildReplySegments(replies) {
-  const usable = replies.filter((r) => r?.text);
-  if (!usable.length) return [];
-
-  // Model 4B đôi khi chỉ sinh 1 reply dù prompt yêu cầu 2 — đọc đúng số thật
-  // chứ không nói cứng "hai lựa chọn" rồi chỉ đọc một.
-  const NUMBERS = ["không", "một", "hai", "ba", "bốn"];
-  const count = NUMBERS[usable.length] || `${usable.length}`;
-  const ordinals = ["Một", "Hai", "Ba", "Bốn"];
-  const segments = [];
-
-  // Gộp các đoạn tiếng Việt liền nhau: mỗi đoạn là một lần khởi động Piper
-  // (~600ms), nên 7 đoạn thành 5 tiết kiệm hơn một giây mỗi câu.
-  let pending = `Có ${count} lựa chọn cho bạn.`;
-  usable.forEach((reply, i) => {
-    pending += ` ${ordinals[i] || i + 1} là:`;
-    segments.push({ text: pending.trim(), voice: "vi" });
-    segments.push({ text: reply.text, voice: voiceFor(reply.text) });
-    // Chuẩn hóa dấu câu: đoạn này sẽ được nối thêm "Hai là:" ở vòng sau, và
-    // TTS đọc liền không nghỉ nếu thiếu dấu chấm.
-    pending = reply.meaning ? `Nghĩa là: ${endPunctuated(reply.meaning)}` : "";
-  });
-  if (pending.trim()) segments.push({ text: pending.trim(), voice: "vi" });
-  return segments;
 }
 
 async function runReview(utt) {
@@ -587,29 +538,21 @@ async function runReview(utt) {
     markStep("original", "done");
 
     if (state.review !== utt) return;
-    const canSpeak = state.ttsEnabled;
-    markStep("translation", utt.translation && canSpeak ? "active" : "skip");
-    if (utt.translation && canSpeak) {
-      ui.fileState.textContent = "nghe lại: bản dịch";
-      await speakAndWait(utt.translation, "translation", "vi");
+    const outbound = utt.direction === "to_counterpart";
+    const canSpeak = state.ttsEnabled && utt.translation;
+    markStep("translation", canSpeak ? "active" : "skip");
+    if (canSpeak) {
+      ui.fileState.textContent = outbound
+        ? "nghe lại: câu để nói theo (đọc chậm)"
+        : "nghe lại: bản dịch";
+      // Chiều nào thì server tự chọn giọng và tốc độ — client chỉ nói đọc cái gì.
+      await speakAndWait(utt.translation, "translation");
       markStep("translation", "done");
     }
-
-
-    if (state.review !== utt) return;
-    const segments = canSpeak ? buildReplySegments(utt.replies) : [];
-    markStep("replies", segments.length ? "active" : "skip");
-    ui.fileState.textContent = "nghe lại: gợi ý trả lời";
-    for (const segment of segments) {
-      if (state.review !== utt) return;
-      await speakAndWait(segment.text, "reply", segment.voice);
-    }
-    if (segments.length) markStep("replies", "done");
   } finally {
     if (state.review === utt) {
       state.review = null;
       ui.fileState.textContent = "nghe lại xong";
-      log("file", "nghe lại xong — phát tiếp");
       setTimeout(resumePlayback, 300);
     }
   }
