@@ -18,8 +18,9 @@ benchmarks/results/*
 
 # --- Cấu hình cục bộ ---
 .env
-config.yaml
-!config.example.yaml
+# config.yaml ĐƯỢC commit trên nhánh release: nó chính là thứ phân biệt nhánh
+# này với release-mac. Ghi đè cục bộ dùng config.local.yaml hoặc biến VOSU_*.
+config.local.yaml
 
 # --- Audio mẫu ---
 *.wav

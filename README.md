@@ -1,5 +1,9 @@
 # vosu — AI Conversational Copilot
 
+> **Nhánh `release` — build NVIDIA/CUDA.** Xem [BUILD.md](BUILD.md).
+> Build macOS ở nhánh `release-mac`; phát triển ở `main`.
+
+
 Trợ lý hội thoại thời gian thực chạy qua tai nghe: nghe người đối diện nói →
 bóc băng → dịch + hiểu hàm ý → gợi ý câu trả lời → **đọc gợi ý qua tai nghe**.
 Toàn bộ xử lý AI chạy **local/offline**.

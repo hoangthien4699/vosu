@@ -1,0 +1,67 @@
+# Cấu hình nhánh `release` — build NVIDIA/CUDA.
+#
+# Đây là build MỤC TIÊU của đặc tả và là build duy nhất được dùng để chốt
+# Benchmark Gate (§6). Ghi đè cục bộ: đặt biến VOSU_* hoặc sửa file này
+# (thay đổi sẽ hiện trong `git status` — cố ý, để không lệch cấu hình mà
+# không ai biết).
+
+platform: cuda
+
+paths:
+  models_dir: models
+  # §3.1 — MVP ưu tiên Small, không mặc định lên Medium. Bài toán là
+  # "đủ nhanh và đủ chính xác để LLM hiểu intent", không phải "chính xác
+  # tuyệt đối". Chỉ nâng nếu benchmark cho thấy Small thực sự không đủ.
+  whisper_model: small
+  llm_gguf: models/qwen2.5-3b-instruct-q4_k_m.gguf
+  llama_server_bin: models/llama-server
+  piper_bin: piper
+  piper_voice_vi: models/piper/vi_VN-vais1000-medium.onnx
+  piper_voice_en: models/piper/en_US-lessac-medium.onnx
+  silero_vad_onnx: models/silero_vad.onnx
+
+vad:
+  backend: silero
+  threshold: 0.5
+  min_silence_ms: 400        # §7 — cộng thẳng vào E2E, đừng hạ xuống 150ms
+  min_speech_ms: 200
+
+chunker:
+  min_partial_window_s: 1.5  # ngưỡng partial, KHÔNG phải speech boundary
+  partial_cooldown_s: 0.8
+  enable_partial: true
+
+stt:
+  beam_size: 1
+  language: null
+
+llm:
+  host: 127.0.0.1
+  port: 8080
+  n_ctx: 2048
+  n_predict: 160
+  temperature: 0.2
+  n_gpu_layers: null         # null -> DeviceProfile cuda = 36
+
+tts:
+  enabled: true
+  voice: vi
+  auto_read_translation: true
+  auto_read_intent: false
+  auto_read_replies: false
+  stream_by_sentence: true
+  realtime_pacing: true
+
+vram:
+  expected_gb: 5.0
+  hard_ceiling_gb: 5.5       # §3.1 — hard ceiling thật, GPU 6GB
+  on_exceed: warn            # đổi sang `reject` nếu muốn từ chối phiên mới
+
+session:
+  max_concurrent_sessions: 1
+  idle_timeout_s: 180.0
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  log_level: INFO
