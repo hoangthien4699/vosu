@@ -41,17 +41,19 @@ async def _run(args) -> BenchmarkResult:
         chunks = 0
         last_chunk_at = 0.0
 
-        async def consume() -> None:
+        async def consume(index: int = i) -> None:
             nonlocal chunks, last_chunk_at
-            async for _audio in engine.synthesize(f"barge_{i}", LONG_TEXT):
+            async for _audio in engine.synthesize(f"barge_{index}", LONG_TEXT):
                 chunks += 1
                 last_chunk_at = time.perf_counter()
 
         task = asyncio.create_task(consume())
 
-        # đợi tới khi thực sự đang phát
+        # Đợi tới khi thực sự đang phát. Poll thay vì Event: ta đang đo một
+        # đối tượng bên ngoài và cố tình KHÔNG thêm cơ chế đồng bộ vào đường
+        # tới hạn của Barge-in chỉ để phục vụ phép đo.
         deadline = time.perf_counter() + 5.0
-        while engine.state is not TtsState.PLAYING and time.perf_counter() < deadline:
+        while engine.state is not TtsState.PLAYING and time.perf_counter() < deadline:  # noqa: ASYNC110
             await asyncio.sleep(0.002)
 
         if engine.state is not TtsState.PLAYING:

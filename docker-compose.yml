@@ -1,0 +1,33 @@
+# Build CUDA. Trên macOS KHÔNG dùng compose — Docker Desktop không cho container
+# truy cập Metal, nên STT lẫn LLM đều rơi về CPU. Chạy trực tiếp:
+#     bash scripts/setup-macos.sh && make run
+
+services:
+  vosu:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cuda
+    image: vosu:cuda
+    ports:
+      - "8000:8000"
+    volumes:
+      # Model nằm ngoài image: nặng GB và thay đổi độc lập với code.
+      - ./models:/app/models:ro
+      - ./config.yaml:/app/config.yaml:ro
+      - ./benchmarks/results:/app/benchmarks/results
+      # Cache HuggingFace: tránh tải lại Whisper mỗi lần dựng container.
+      - whisper-cache:/root/.cache/huggingface
+    environment:
+      VOSU_PLATFORM: cuda
+      VOSU_SERVER__LOG_LEVEL: INFO
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  whisper-cache:

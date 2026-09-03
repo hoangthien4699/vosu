@@ -1,0 +1,73 @@
+# Cấu hình vosu — copy thành `config.yaml` rồi sửa.
+# Thứ tự ưu tiên: mặc định trong code < file này < biến môi trường VOSU_*
+#
+# Biến môi trường dùng `__` để xuống cấp:
+#   VOSU_LLM__PORT=9090          -> llm.port
+#   VOSU_TTS__ENABLED=false      -> tts.enabled
+#   VOSU_PLATFORM=cuda           -> ép build (bỏ qua auto-detect)
+
+# null = tự nhận diện (cuda nếu có nvidia-smi, macos trên Darwin, cpu còn lại)
+platform: null
+
+paths:
+  models_dir: models
+  whisper_model: small           # tiny|base|small|medium — MVP ưu tiên small (§3.1)
+  llm_gguf: models/qwen2.5-3b-instruct-q4_k_m.gguf
+  llama_server_bin: models/llama-server
+  piper_bin: piper
+  piper_voice_vi: models/piper/vi_VN-vais1000-medium.onnx
+  piper_voice_en: models/piper/en_US-lessac-medium.onnx
+  silero_vad_onnx: models/silero_vad.onnx
+
+vad:
+  backend: silero                # silero | energy (energy = fallback, không cần model)
+  threshold: 0.5
+  # §7: 300-500ms. Ngưỡng này CỘNG THẲNG vào E2E — đặt 150ms sẽ chốt câu nhầm
+  # khi người nói ngập ngừng ("uhm", "well").
+  min_silence_ms: 400
+  min_speech_ms: 200
+
+chunker:
+  # §2.2: đây CHỈ là ngưỡng tối thiểu để kích hoạt partial STT.
+  # KHÔNG phải speech boundary — final STT luôn do VAD endpoint kích hoạt.
+  min_partial_window_s: 1.5
+  partial_cooldown_s: 0.8        # chặn sliding-window quá dày (GPU 6GB)
+  max_utterance_s: 30.0
+  enable_partial: true
+
+stt:
+  beam_size: 1
+  language: null                 # null = tự nhận diện (LID)
+  vad_filter: false              # VAD đã làm ở tầng audio/, đừng làm hai lần
+
+llm:
+  host: 127.0.0.1
+  port: 8080
+  n_ctx: 2048
+  n_predict: 160
+  temperature: 0.2
+  n_gpu_layers: null             # null = lấy từ device profile (CUDA 36, Metal 99)
+  startup_timeout_s: 90.0
+
+tts:
+  enabled: true
+  voice: vi
+  # §2.4.1 MVP scope — chốt để tránh audio dồn dập chồng lấp hội thoại thật
+  auto_read_translation: true    # AUTO — giá trị cốt lõi khi nghe live
+  auto_read_intent: false        # chỉ hiển thị UI
+  auto_read_replies: false       # chỉ đọc khi người dùng bấm chọn
+  stream_by_sentence: true
+
+vram:
+  expected_gb: 5.0
+  hard_ceiling_gb: 5.5           # §3.1 — vượt thì degrade/reject/unload
+  on_exceed: warn                # warn | reject
+
+session:
+  max_concurrent_sessions: 1     # §10 — 6GB chỉ đủ phục vụ tốt 1 client
+  idle_timeout_s: 180.0
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  log_level: INFO

@@ -106,7 +106,10 @@ async def _run(args) -> BenchmarkResult:
     try:
         # warm-up không tính vào kết quả
         await one_utterance(samples[0][1])
-        e2e_ms.clear(); stt_ms.clear(); ttft_ms.clear(); errors = 0
+        e2e_ms.clear()
+        stt_ms.clear()
+        ttft_ms.clear()
+        errors = 0
 
         # Chồng lấn thật: khởi động utterance kế tiếp khi cái trước còn đang
         # sinh token — đây chính là kịch bản gây Compute Contention.

@@ -212,6 +212,9 @@ class Config:
 # Nạp config
 # --------------------------------------------------------------------------- #
 
+#: Biến VOSU_* là ĐIỀU KHIỂN, không phải khóa config — không ánh xạ vào Config.
+RESERVED_ENV = frozenset({"VOSU_CONFIG"})
+
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
@@ -276,7 +279,7 @@ def _apply_mapping(obj: Any, data: dict[str, Any], path: str = "") -> None:
 def _apply_env(obj: Any, env: dict[str, str], prefix: str = "VOSU_") -> None:
     """VOSU_LLM__PORT=9090 -> config.llm.port. VOSU_PLATFORM=cuda -> config.platform."""
     for raw_key, raw_value in env.items():
-        if not raw_key.startswith(prefix):
+        if not raw_key.startswith(prefix) or raw_key in RESERVED_ENV:
             continue
         parts = raw_key[len(prefix) :].lower().split("__")
         target = obj

@@ -8,7 +8,6 @@ phiên bản CUDA và memory fragmentation.
 from __future__ import annotations
 
 import asyncio
-import time
 
 from .audio_fixtures import get_samples
 from .common import BenchmarkResult, Check, base_parser, run_cli
@@ -79,7 +78,7 @@ async def _run(args) -> BenchmarkResult:
     await client.close()
     if started_here:
         await manager.stop()
-    time.sleep(1.0)
+    await asyncio.sleep(1.0)   # để driver kịp thu hồi VRAM
     after_cleanup = query_vram()
 
     ceiling = config.benchmark.vram_gb

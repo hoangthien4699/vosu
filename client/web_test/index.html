@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vosu — Copilot Test Client</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>vosu <span class="sub">AI Conversational Copilot</span></h1>
+  <div class="controls">
+    <span id="status" class="badge off">chưa kết nối</span>
+    <button id="toggle">Bắt đầu nghe</button>
+    <button id="stopTts" class="ghost" disabled>Dừng đọc</button>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Đang nghe <small id="utteranceId"></small></h2>
+    <p id="partial" class="partial" aria-live="polite">…</p>
+    <p id="final" class="final"></p>
+    <div class="meta">
+      <span id="lang"></span>
+      <span id="sttLatency"></span>
+    </div>
+  </section>
+
+  <section class="panel accent">
+    <h2>Bản dịch</h2>
+    <p id="translation" class="translation" aria-live="polite"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Hàm ý</h2>
+    <p id="intent" class="intent"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Gợi ý trả lời <small>bấm để đọc</small></h2>
+    <ul id="replies" class="replies"></ul>
+  </section>
+
+  <section class="panel wide">
+    <h2>Chỉ số <small>E2E = VAD endpoint → kết quả hữu ích đầu tiên</small></h2>
+    <div class="metrics">
+      <div><b id="mE2e">—</b><span>E2E gần nhất</span></div>
+      <div><b id="mE2eP95">—</b><span>E2E P95</span></div>
+      <div><b id="mTtft">—</b><span>LLM TTFT</span></div>
+      <div><b id="mStt">—</b><span>STT final</span></div>
+      <div><b id="mBarge">—</b><span>Barge-in</span></div>
+      <div><b id="mUtt">0</b><span>utterance</span></div>
+    </div>
+  </section>
+
+  <section class="panel wide">
+    <h2>Nhật ký sự kiện <small>semantic event, không phải JSON thô của LLM</small></h2>
+    <div id="log" class="log"></div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
