@@ -113,6 +113,29 @@ Không phải kết quả Gate — Gate phải chạy trên NVIDIA 6GB. Đây l�
 | B6 event-loop lag P95 dưới tải | 2.6ms | 50ms | ✓ |
 | B8 Barge-in | < 0.1ms | 200ms | ✓ |
 
+### Đã chạy thật đầu-cuối
+
+Với Whisper base, Qwen2.5-3B trên Metal và Piper thật, qua WebSocket thật:
+
+```
+  0 session_started
+  1 audio_started
+  2 stt_final          "I think we should table this discussion for now."
+  3 copilot_started
+ 12 translation_delta  full='Tôi nghĩ '
+ 24 translation_delta  full='Tôi nghĩ chúng ta nên'
+ 34 tts_started        translation  ← bắt đầu đọc khi LLM CÒN đang sinh
+ 35 intent_done        suggest postponing discussion
+ 36 reply_ready        [0] Agreed, let's discuss later.
+ 37 reply_ready        [1] Sounds good, let's set a new time.
+ 38 copilot_done       ttft=31.55ms tokens=43
+ 83 tts_done           44 chunk PCM
+```
+
+Hai điều đáng chú ý: `tts_started` ở seq 34 nghĩa là streaming TTS theo câu
+hoạt động — không đợi cả JSON. Và `copilot_done` (38) về trước `tts_done` (83)
+rất xa, đúng contract "text không phụ thuộc TTS hoàn tất".
+
 B6 là kết quả đáng giá nhất ở đây: event-loop lag giữ ở 2.6ms P95 trong khi
 STT + LLM + TTS chạy đồng thời ở 74% CPU. Đó là kiểm chứng thực tế cho luận
 điểm của §2.4 — chạy inference trong worker riêng thật sự giữ được event loop
