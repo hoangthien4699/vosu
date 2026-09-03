@@ -13,7 +13,17 @@ paths:
   # "đủ nhanh và đủ chính xác để LLM hiểu intent", không phải "chính xác
   # tuyệt đối". Chỉ nâng nếu benchmark cho thấy Small thực sự không đủ.
   whisper_model: small
-  llm_gguf: models/qwen2.5-3b-instruct-q4_k_m.gguf
+  # Gemma 3 4B thay Qwen2.5-3B: Qwen trả quick reply sai ngôn ngữ ở một nửa
+  # số ca đo được (3/6 câu tiếng Anh nhận reply tiếng Việt), mà reply tồn tại
+  # để người dùng NÓI LẠI với người đối diện.
+  #
+  # CẢNH BÁO: Gemma tốn thêm ~451 MB so với Qwen (RSS 2459 so với 2008 MB).
+  # Ngân sách VRAM ở §3.1 tính cho Qwen và đã sát mép 5.5GB. CHẠY B4 TRƯỚC
+  # khi coi đây là cấu hình chốt. Nếu vượt trần, theo thứ tự ưu tiên:
+  #   1. whisper_model: base   (tiết kiệm nhiều nhất)
+  #   2. llm.n_ctx: 1536
+  #   3. quay lại Qwen (đổi đúng dòng này — template tự nhận diện)
+  llm_gguf: models/gemma-3-4b-it-q4_k_m.gguf
   llama_server_bin: models/llama-server
   piper_bin: piper
   piper_voice_vi: models/piper/vi_VN-vais1000-medium.onnx
@@ -42,6 +52,10 @@ llm:
   n_predict: 160
   temperature: 0.2
   n_gpu_layers: null         # null -> DeviceProfile cuda = 36
+  prompt_template: auto      # auto suy từ tên file GGUF
+  # BẮT BUỘC với Gemma 3 (sliding-window attention): thiếu cờ này thì mỗi
+  # utterance xử lý lại toàn bộ system prompt, TTFT tệ đi 7 lần.
+  swa_full: true
 
 tts:
   enabled: true

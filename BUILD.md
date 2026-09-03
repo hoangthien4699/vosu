@@ -24,7 +24,15 @@ lúc chạy — không có nhánh code riêng nào cần bảo trì.
 | STT | `cuda` / `int8_float16` | GPU rời, có cuDNN |
 | LLM | `-ngl 36` | Đủ offload Qwen2.5-3B lên 6GB |
 | Whisper | `small` | §3.1 — không mặc định lên Medium |
+| LLM model | Gemma 3 4B | Qwen trả reply sai ngôn ngữ 3/6 ca |
+| `--swa-full` | bật | Bắt buộc với Gemma 3 (SWA), nếu không TTFT tệ 7 lần |
 | VRAM hard ceiling | 5.5GB | §3.1, enforce qua `nvidia-smi` |
+
+> **Rủi ro VRAM chưa được kiểm chứng.** Gemma 3 4B tốn thêm ~451 MB so với
+> Qwen2.5-3B (RSS 2459 so với 2008 MB, đo trên Metal). Ngân sách ở §3.1 tính
+> cho Qwen và đã sát mép 5.5GB, nên **B4 trên nhánh này là mục bắt buộc phải
+> chạy trước tiên**. Nếu vượt trần, thứ tự hạ: `whisper_model: base` →
+> `n_ctx: 1536` → quay lại Qwen.
 
 ## Yêu cầu hệ thống
 
