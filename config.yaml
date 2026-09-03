@@ -15,7 +15,10 @@ paths:
   # đích phát triển, `base` giữ vòng lặp thử-sai ở mức chịu được.
   # Đổi sang `small` nếu cần đối chiếu chất lượng với bản CUDA.
   whisper_model: base
-  llm_gguf: models/qwen2.5-3b-instruct-q4_k_m.gguf
+  # Gemma 3 4B thay Qwen2.5-3B: Qwen trả quick reply sai ngôn ngữ ở một nửa
+  # số ca đo được, mà reply tồn tại để người dùng NÓI LẠI với người đối diện.
+  # Trên Mac không có trần VRAM nên phần nặng thêm 451 MB không thành vấn đề.
+  llm_gguf: models/gemma-3-4b-it-q4_k_m.gguf
   # brew install llama.cpp, rồi scripts/download_models.sh tự liên kết vào đây
   llama_server_bin: models/llama-server
   # Homebrew KHÔNG có formula `piper` — cài bằng `pip install piper-tts`,
@@ -52,6 +55,10 @@ llm:
   n_predict: 160
   temperature: 0.2
   n_gpu_layers: null         # null -> DeviceProfile macos = 99 (Metal)
+  prompt_template: auto      # auto suy từ tên file GGUF
+  # BẮT BUỘC với Gemma 3 (sliding-window attention). Đo trên M4: thiếu cờ này
+  # thì mỗi utterance xử lý lại 241 token/610ms thay vì 15 token/86ms.
+  swa_full: true
 
 tts:
   enabled: true
