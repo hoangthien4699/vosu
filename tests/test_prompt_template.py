@@ -87,3 +87,50 @@ def test_prompt_template_dat_duoc_qua_bien_moi_truong():
     cfg = load_config(env={"VOSU_LLM__PROMPT_TEMPLATE": "gemma"})
     assert cfg.llm.prompt_template == "gemma"
     assert resolve_template(cfg).name == "gemma"
+
+
+# --------------------------------------------------------------------------- #
+# Ràng buộc JSON Schema
+# --------------------------------------------------------------------------- #
+
+def test_schema_ep_dung_hai_reply():
+    from app.ai.llm import response_schema
+
+    schema = response_schema(with_meaning=True)
+    replies = schema["properties"]["replies"]
+    assert replies["minItems"] == replies["maxItems"] == 2, (
+        "không ép đúng 2 reply thì model sẽ sinh 1 — đã quan sát thật"
+    )
+    assert replies["items"]["required"] == ["text", "meaning"]
+
+
+def test_translation_dung_dau_trong_schema():
+    """Thứ tự properties quyết định thứ tự sinh khi có grammar.
+
+    `translation` phải đầu tiên: đó là thứ quyết định "first useful result"
+    của §7. Đảo thứ tự là E2E tụt mà không có test nào đỏ.
+    """
+    from app.ai.llm import response_schema
+
+    for with_meaning in (True, False):
+        keys = list(response_schema(with_meaning)["properties"])
+        assert keys[0] == "translation", keys
+
+
+def test_schema_khong_meaning_thi_reply_la_chuoi():
+    from app.ai.llm import response_schema
+
+    assert response_schema(with_meaning=False)["properties"]["replies"]["items"] == {
+        "type": "string"
+    }
+
+
+def test_payload_gui_kem_json_schema():
+    """Bật cờ mà không gửi lên server thì grammar vô tác dụng."""
+    import inspect
+
+    from app.ai.llm import LlmClient
+
+    source = inspect.getsource(LlmClient.stream)
+    assert 'payload["json_schema"]' in source
+    assert "cfg.json_schema" in source

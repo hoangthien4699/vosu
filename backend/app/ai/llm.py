@@ -37,7 +37,7 @@ LANGUAGE RULES — these matter more than anything else:
   English speech gets English replies, Japanese gets Japanese. Vietnamese ONLY
   if the speaker spoke Vietnamese.
   Exactly 2 replies, each under 15 words, meaningfully different.
-{purpose_rule}
+{extra_rule}
 Example — the speaker said, in English: "We need more time."
 {example}
 
@@ -51,48 +51,47 @@ _PLAIN_EXAMPLE = (
     '"That\'s fine, take the time you need."]}'
 )
 
-_PURPOSE_SCHEMA = (
+_MEANING_SCHEMA = (
     '{"translation":"...","intent":"...",'
-    '"replies":[{"text":"...","purpose":"..."},{"text":"...","purpose":"..."}]}'
+    '"replies":[{"text":"...","meaning":"..."},{"text":"...","meaning":"..."}]}'
 )
-_PURPOSE_RULE = """- "purpose": why the user would pick THIS reply — what it achieves in the
-  conversation. ALWAYS VIETNAMESE, under 12 words. Write "purpose" in
-  Vietnamese even though the reply next to it is English or Japanese — the
-  reply is for the speaker, the purpose is for the user. Two replies must have
-  clearly different purposes, not two wordings of the same move.
+_MEANING_RULE = """- "meaning": the Vietnamese translation of "text" right next to it, so the
+  user knows what they are about to say. ALWAYS VIETNAMESE, even though "text"
+  is English or Japanese — "text" is for the speaker, "meaning" is for the
+  user. Translate faithfully; do not add commentary and do not explain why.
 """
-_PURPOSE_EXAMPLE = (
+_MEANING_EXAMPLE = (
     '{"translation":"Chúng tôi cần thêm thời gian.",'
     '"intent":"Muốn xin gia hạn thêm thời gian.",'
     '"replies":[{"text":"How much more time do you need?",'
-    '"purpose":"Ép đối phương chốt một mốc cụ thể"},'
+    '"meaning":"Anh cần thêm bao nhiêu thời gian nữa?"},'
     '{"text":"That\'s fine, take the time you need.",'
-    '"purpose":"Nhượng bộ để giữ quan hệ tốt"}]}'
+    '"meaning":"Không sao, cứ thong thả làm cho xong."}]}'
 )
 
 
-def system_prompt(with_purpose: bool = True) -> str:
-    """Prompt hệ thống. `with_purpose` thêm lý do nên chọn cho từng reply.
+def system_prompt(with_meaning: bool = True) -> str:
+    """Prompt hệ thống. `with_meaning` thêm bản dịch tiếng Việt cho từng reply.
 
-    §4.4 cố ý bỏ trường mô tả cho từng reply vì token thêm làm tăng latency.
-    `purpose` khác `meaning` của v1 (bản dịch reply) — nó nói MỤC ĐÍCH khi chọn
-    câu đó.
+    Đây CHÍNH LÀ trường `meaning` mà §4.4 đã bỏ đi ("mỗi reply thêm bản dịch sẽ
+    làm tăng token → tăng latency"). Đưa lại theo yêu cầu sản phẩm: người dùng
+    là người Việt, câu gợi ý là tiếng Anh — không biết mình sắp nói gì thì
+    không chọn được.
 
-    Không miễn phí: prompt dài thêm ~360 ký tự nên first-useful-result tăng
-    198ms -> 282ms và tổng thời gian sinh tăng 69% (đo trên Gemma 3 4B / M4).
-    Tắt được qua `llm.reply_purpose`.
+    Chi phí đã đo, xem `core/config.py::LlmConfig.reply_meaning`. Tắt được nếu
+    ưu tiên tốc độ.
     """
-    if with_purpose:
+    if with_meaning:
         return _BASE_RULES.format(
-            schema=_PURPOSE_SCHEMA, purpose_rule=_PURPOSE_RULE, example=_PURPOSE_EXAMPLE
+            schema=_MEANING_SCHEMA, extra_rule=_MEANING_RULE, example=_MEANING_EXAMPLE
         )
     return _BASE_RULES.format(
-        schema=_PLAIN_SCHEMA, purpose_rule="", example=_PLAIN_EXAMPLE
+        schema=_PLAIN_SCHEMA, extra_rule="", example=_PLAIN_EXAMPLE
     )
 
 
 #: Giữ tên cũ cho test và mã gọi sẵn có.
-SYSTEM_PROMPT = system_prompt(with_purpose=False)
+SYSTEM_PROMPT = system_prompt(with_meaning=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -178,16 +177,61 @@ def resolve_template(config) -> PromptTemplate:
     return CHATML
 
 
+def response_schema(with_meaning: bool = True) -> dict:
+    """JSON Schema ràng buộc output của LLM (llama.cpp dịch thành GBNF grammar).
+
+    KHÔNG phải tối ưu hóa — là điều kiện để tính năng chạy được. Đo trên
+    Gemma 3 4B với schema có `meaning`, 5 câu:
+
+                        không grammar   có json_schema
+        JSON hợp lệ          0/5             5/5
+        đủ 2 reply           0/5             5/5
+        bọc markdown         5/5             0/5
+        trung vị          2954ms          3714ms  (+26%)
+
+    Không ràng buộc thì model gộp cả hai reply vào MỘT object với khóa trùng
+    nên parser ghi đè và chỉ còn một reply; và nó bọc markdown fence dù prompt
+    cấm rõ.
+
+    Thứ tự `properties` quyết định thứ tự sinh: `translation` phải đứng đầu để
+    streaming có thứ hiển thị sớm nhất (§7 — first useful result).
+    """
+    reply_item: dict
+    if with_meaning:
+        reply_item = {
+            "type": "object",
+            "properties": {"text": {"type": "string"}, "meaning": {"type": "string"}},
+            "required": ["text", "meaning"],
+        }
+    else:
+        reply_item = {"type": "string"}
+
+    return {
+        "type": "object",
+        "properties": {
+            "translation": {"type": "string"},
+            "intent": {"type": "string"},
+            "replies": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": reply_item,
+            },
+        },
+        "required": ["translation", "intent", "replies"],
+    }
+
+
 def build_prompt(
     text: str,
     language: str | None,
     template: PromptTemplate = CHATML,
     *,
-    with_purpose: bool = False,
+    with_meaning: bool = False,
 ) -> str:
     lang = language or "unknown"
     user = f'Language: {lang}\nSpeech: "{text}"'
-    return template.render(system_prompt(with_purpose), user)
+    return template.render(system_prompt(with_meaning), user)
 
 
 @dataclass
@@ -218,7 +262,7 @@ class LlmClient:
         """Prompt đúng định dạng của model đang nạp."""
         return build_prompt(
             text, language, self.template,
-            with_purpose=self._config.llm.reply_purpose,
+            with_meaning=self._config.llm.reply_meaning,
         )
 
     async def start(self) -> None:
@@ -272,6 +316,9 @@ class LlmClient:
             # chạy tới hết n_predict và JSON bị cắt cụt.
             "stop": list(self.template.stop),
         }
+        if cfg.json_schema:
+            # Bắt buộc khi reply_meaning bật — xem response_schema().
+            payload["json_schema"] = response_schema(cfg.reply_meaning)
 
         started = time.perf_counter()
         chunks: list[str] = []

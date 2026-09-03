@@ -267,8 +267,8 @@ function onEvent(event) {
       break;
 
     case "reply_ready":
-      addReply(data.index, data.text, data.purpose || "");
-      if (state.utt) state.utt.replies[data.index] = { text: data.text, purpose: data.purpose || "" };
+      addReply(data.index, data.text, data.meaning || "");
+      if (state.utt) state.utt.replies[data.index] = { text: data.text, meaning: data.meaning || "" };
       markUseful();
       break;
 
@@ -324,18 +324,18 @@ function markUseful() {
   ui.mE2eP95.textContent = ms(percentile(state.e2eSamples, 95));
 }
 
-function addReply(index, text, purpose) {
+function addReply(index, text, meaning) {
   state.replies[index] = text;
   const item = document.createElement("li");
   const idx = document.createElement("span");
   idx.className = "idx";
   idx.textContent = `${index + 1}.`;
   item.append(idx, document.createTextNode(text));
-  if (purpose) {
-    const why = document.createElement("span");
-    why.className = "purpose";
-    why.textContent = `mục đích: ${purpose}`;
-    item.append(why);
+  if (meaning) {
+    const vi = document.createElement("span");
+    vi.className = "meaning";
+    vi.textContent = `nghĩa là: ${meaning}`;
+    item.append(vi);
   }
   item.title = "Bấm để đọc qua tai nghe";
   // §2.4.1 MVP scope: quick reply CHỈ đọc khi người dùng chọn thủ công.
@@ -555,6 +555,7 @@ function speakAndWait(text, field, voice) {
  * đang có, và không cần thêm vòng gọi model nào. */
 const VIET_MARKS = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
 const voiceFor = (text) => (VIET_MARKS.test(text) ? "vi" : "en");
+const endPunctuated = (text) => (/[.!?…]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
 
 function buildReplySegments(replies) {
   const usable = replies.filter((r) => r?.text);
@@ -574,7 +575,9 @@ function buildReplySegments(replies) {
     pending += ` ${ordinals[i] || i + 1} là:`;
     segments.push({ text: pending.trim(), voice: "vi" });
     segments.push({ text: reply.text, voice: voiceFor(reply.text) });
-    pending = reply.purpose ? `Mục đích là ${reply.purpose}.` : "";
+    // Chuẩn hóa dấu câu: đoạn này sẽ được nối thêm "Hai là:" ở vòng sau, và
+    // TTS đọc liền không nghỉ nếu thiếu dấu chấm.
+    pending = reply.meaning ? `Nghĩa là: ${endPunctuated(reply.meaning)}` : "";
   });
   if (pending.trim()) segments.push({ text: pending.trim(), voice: "vi" });
   return segments;

@@ -88,11 +88,84 @@ def test_result_rong_thi_khong_useful():
     assert not parser.result.is_useful
 
 
-def test_bo_qua_truong_meaning_thua():
-    """§4.4 bỏ `meaning`; nếu model vẫn sinh thì không được coi là reply."""
+def test_meaning_di_kem_reply():
+    """`meaning` là bản dịch tiếng Việt của reply — người dùng cần biết mình
+    sắp nói gì. §4.4 từng bỏ trường này vì latency; đưa lại theo yêu cầu sản
+    phẩm, và chi phí đã được đo lại."""
     payload = json.dumps(
-        {"replies": [{"text": "Sure.", "meaning": "Chắc chắn rồi."}]}, ensure_ascii=False
+        {"replies": [{"text": "Sure, that works.", "meaning": "Được, vậy cũng ổn."}]},
+        ensure_ascii=False,
     )
     events, parser = feed_all(payload)
-    assert [e.text for e in events if isinstance(e, ReplyReady)] == ["Sure."]
-    assert parser.result.replies == ["Sure."]
+    replies = [e for e in events if isinstance(e, ReplyReady)]
+    assert [r.text for r in replies] == ["Sure, that works."]
+    assert [r.meaning for r in replies] == ["Được, vậy cũng ổn."]
+    assert parser.result.replies == ["Sure, that works."]
+
+
+def test_van_chap_nhan_tu_khoa_purpose_cu():
+    """Model đôi khi bám theo từ khóa cũ — không được mất dữ liệu vì thế."""
+    payload = json.dumps(
+        {"replies": [{"text": "Okay.", "purpose": "Đồng ý ngắn gọn."}]}, ensure_ascii=False
+    )
+    events, _ = feed_all(payload)
+    assert [e.meaning for e in events if isinstance(e, ReplyReady)] == ["Đồng ý ngắn gọn."]
+
+
+# --------------------------------------------------------------------------- #
+# Dọn rác cấu trúc do sinh có grammar
+# --------------------------------------------------------------------------- #
+
+def test_cat_rac_cau_truc_o_cuoi_gia_tri():
+    """Grammar đảm bảo JSON đúng cấu trúc, nhưng `{`, `}` là ký tự HỢP LỆ bên
+    trong chuỗi JSON nên không cấm được. Quan sát thật với Gemma 3 4B:
+
+        "meaning":"Được rồi, chúng ta tạm dừng lại đây.},{"
+
+    JSON vẫn hợp lệ, chỉ là người dùng đọc thấy rác.
+    """
+    from app.ai.copilot import clean_value
+
+    assert clean_value("Tạm dừng lại đây.},{") == "Tạm dừng lại đây."
+    assert clean_value("Xong.}]") == "Xong."
+
+
+def test_khong_cat_nham_dau_cau_binh_thuong():
+    from app.ai.copilot import clean_value
+
+    for text in (
+        "Bình thường không có rác.",
+        'Anh ấy nói "được" rồi.',
+        "Câu hỏi phải không?",
+        "Kết thúc bằng dấu phẩy,",
+        "Ba chấm…",
+    ):
+        assert clean_value(text) == text, text
+
+
+def test_cat_het_thi_giu_nguyen():
+    """Không bao giờ trả về chuỗi rỗng — thà giữ rác còn hơn mất nội dung."""
+    from app.ai.copilot import clean_value
+
+    assert clean_value("}{") == "}{"
+    assert clean_value("]") == "]"
+
+
+def test_translation_co_rac_duoc_sua_lai_qua_delta():
+    """UI đã hiện phần rác qua delta, nên phải phát thêm một delta sửa lại."""
+    payload = '{"translation":"Tôi nghĩ vậy.},{"}'
+    events, parser = feed_all(payload, size=4)
+
+    deltas = [e for e in events if isinstance(e, TranslationDelta)]
+    assert deltas[-1].full == "Tôi nghĩ vậy.", deltas[-1].full
+    assert parser.result.translation == "Tôi nghĩ vậy."
+
+
+def test_rac_trong_reply_va_meaning_cung_duoc_cat():
+    payload = json.dumps(
+        {"replies": [{"text": "Okay.},{", "meaning": "Được rồi.},{"}]}, ensure_ascii=False
+    )
+    events, _ = feed_all(payload)
+    reply = next(e for e in events if isinstance(e, ReplyReady))
+    assert reply.text == "Okay."
+    assert reply.meaning == "Được rồi."
