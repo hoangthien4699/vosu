@@ -416,3 +416,101 @@ def test_nhieu_cau_cach_nhau_khong_bi_gop_hay_tach(client):
                 break
 
     assert len(seen) == 3, f"kỳ vọng 3 utterance riêng biệt, nhận {sorted(seen)}"
+
+
+def test_doc_thu_cong_van_chay_sau_khi_utterance_ket_thuc(tts_client):
+    """§2.4.1: quick reply CHỈ đọc khi người dùng chọn thủ công.
+
+    Lúc người dùng bấm chọn thì pipeline đã xong từ lâu và utterance đã ở
+    trạng thái kết thúc. Nếu worker TTS bỏ qua utterance kết thúc thì tính năng
+    này KHÔNG hoạt động — bấm vào không có gì xảy ra, và không có lỗi nào.
+    """
+    with tts_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        payload = utterance_stream()
+        for i in range(0, len(payload), 3200):
+            ws.send_bytes(payload[i : i + 3200])
+
+        # đợi cả pipeline lẫn TTS tự động xong hẳn
+        for _ in range(500):
+            message = ws.receive()
+            if message.get("text") and json.loads(message["text"])["type"] == "tts_done":
+                break
+
+        ws.send_text(json.dumps({
+            "action": "speak_reply", "reply_index": 0, "text": "Understood, thanks.",
+        }))
+
+        started = None
+        for _ in range(200):
+            message = ws.receive()
+            if not message.get("text"):
+                continue
+            event = json.loads(message["text"])
+            if event["type"] == "tts_started":
+                started = event
+                break
+
+    assert started is not None, "bấm chọn gợi ý trả lời nhưng TTS không chạy"
+    assert started["data"]["text"] == "Understood, thanks."
+    assert started["data"]["utterance_field"] == "reply"
+
+
+def test_che_do_manual_server_khong_tu_doc(tts_client):
+    """Chế độ nghe lại: client tự quyết thứ tự đọc, server không chen vào."""
+    with tts_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        ws.send_text(json.dumps({"action": "set_tts_mode", "mode": "manual"}))
+
+        payload = utterance_stream()
+        for i in range(0, len(payload), 3200):
+            ws.send_bytes(payload[i : i + 3200])
+        events = drain(ws, "copilot_done", limit=400)
+
+    assert not [e for e in events if e["type"] == "tts_started"], (
+        "chế độ manual mà server vẫn tự đọc"
+    )
+
+
+def test_manual_roi_client_yeu_cau_doc_theo_thu_tu(tts_client):
+    with tts_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        ws.send_text(json.dumps({"action": "set_tts_mode", "mode": "manual"}))
+        payload = utterance_stream()
+        for i in range(0, len(payload), 3200):
+            ws.send_bytes(payload[i : i + 3200])
+        drain(ws, "copilot_done", limit=400)
+
+        for field, text in (("translation", "Bản dịch."), ("intent", "Hàm ý."),
+                            ("reply", "Two options for you.")):
+            ws.send_text(json.dumps({"action": "speak", "field": field, "text": text}))
+
+        seen = []
+        for _ in range(600):
+            message = ws.receive()
+            if not message.get("text"):
+                continue
+            event = json.loads(message["text"])
+            if event["type"] == "tts_started":
+                seen.append((event["data"]["utterance_field"], event["data"]["text"]))
+            if len(seen) == 3:
+                break
+
+    assert seen == [
+        ("translation", "Bản dịch."), ("intent", "Hàm ý."), ("reply", "Two options for you."),
+    ], f"thứ tự đọc sai: {seen}"
+
+
+def test_stt_final_co_vi_tri_cau_trong_stream(client):
+    """Client cần `start_s` để cắt lại đúng đoạn audio GỐC của câu."""
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        payload = utterance_stream()
+        for i in range(0, len(payload), 3200):
+            ws.send_bytes(payload[i : i + 3200])
+        events = drain(ws, "stt_final")
+
+    final = next(e for e in events if e["type"] == "stt_final")
+    start_s = final["data"]["start_s"]
+    # client chèn 0.4s im lặng trước khi nói (xem utterance_stream)
+    assert 0.1 < start_s < 0.9, f"start_s={start_s} không khớp vị trí thật của câu"

@@ -22,7 +22,7 @@ const ui = {
   pauseBtn: el("pauseBtn"), autoPause: el("autoPause"),
   autoPauseWrap: el("autoPauseWrap"), filePanel: el("filePanel"),
   fileName: el("fileName"), fileBar: el("fileBar"), filePos: el("filePos"),
-  fileState: el("fileState"),
+  fileState: el("fileState"), reviewSteps: el("reviewSteps"),
   mE2e: el("mE2e"), mE2eP95: el("mE2eP95"), mTtft: el("mTtft"),
   mStt: el("mStt"), mBarge: el("mBarge"), mUtt: el("mUtt"),
 };
@@ -39,7 +39,10 @@ const state = {
   utterances: 0,
   replies: [],
   file: null,        // bộ phát file, xem streamFile()
-  busy: null,        // theo dõi backend đã xử lý xong câu hiện tại chưa
+  ttsEnabled: true,  // server báo qua session_started
+  utt: null,         // dữ liệu câu đang xử lý, gom để nghe lại
+  review: null,      // tiến trình nghe lại đang chạy
+  ttsWaiter: null,   // resolve khi lượt TTS hiện tại kết thúc
 };
 
 /* ------------------------------- nhật ký ------------------------------- */
@@ -198,6 +201,7 @@ function onEvent(event) {
 
   switch (type) {
     case "session_started":
+      state.ttsEnabled = data.tts_enabled;
       setStatus(`đã kết nối · ${data.platform}`, "on");
       log(type, `platform=${data.platform} tts=${data.tts_enabled}`);
       break;
@@ -227,7 +231,16 @@ function onEvent(event) {
       ui.mStt.textContent = ms(data.latency_ms);
       log(type, `[${data.language}] ${data.text}`);
 
-      // Server đã chốt được một câu -> giữ file lại cho tới khi xử lý xong.
+      // Server đã chốt được một câu -> giữ file lại cho tới khi nghe xong.
+      state.utt = {
+        id: uttId,
+        startS: data.start_s ?? 0,
+        durationS: data.duration_s ?? 0,
+        source: data.text,
+        translation: "",
+        intent: "",
+        replies: [],
+      };
       beginUtteranceHold();
       updateFileUi();
       break;
@@ -242,23 +255,27 @@ function onEvent(event) {
 
     case "translation_delta":
       ui.translation.textContent = data.full;
+      if (state.utt) state.utt.translation = data.full;
       markUseful();
       break;
 
     case "intent_done":
       ui.intent.textContent = data.intent;
+      if (state.utt) state.utt.intent = data.intent;
       markUseful();
       log(type, data.intent);
       break;
 
     case "reply_ready":
-      addReply(data.index, data.text);
+      addReply(data.index, data.text, data.purpose || "");
+      if (state.utt) state.utt.replies[data.index] = { text: data.text, purpose: data.purpose || "" };
       markUseful();
       break;
 
     case "copilot_done":
       ui.mTtft.textContent = ms(data.ttft_ms);
       log(type, `ttft=${ms(data.ttft_ms)} total=${ms(data.total_ms)} tokens=${data.tokens}${data.truncated ? " (BỊ CẮT)" : ""}`);
+      maybeStartReview();
       break;
 
     case "tts_started":
@@ -307,10 +324,19 @@ function markUseful() {
   ui.mE2eP95.textContent = ms(percentile(state.e2eSamples, 95));
 }
 
-function addReply(index, text) {
+function addReply(index, text, purpose) {
   state.replies[index] = text;
   const item = document.createElement("li");
-  item.textContent = text;
+  const idx = document.createElement("span");
+  idx.className = "idx";
+  idx.textContent = `${index + 1}.`;
+  item.append(idx, document.createTextNode(text));
+  if (purpose) {
+    const why = document.createElement("span");
+    why.className = "purpose";
+    why.textContent = `mục đích: ${purpose}`;
+    item.append(why);
+  }
   item.title = "Bấm để đọc qua tai nghe";
   // §2.4.1 MVP scope: quick reply CHỈ đọc khi người dùng chọn thủ công.
   item.onclick = () => {
@@ -364,8 +390,10 @@ async function start() {
 
 function stop() {
   state.running = false;
-  if (state.busy?.settle) clearTimeout(state.busy.settle);
-  state.busy = null;
+  state.review = null;
+  state.utt = null;
+  if (state.ttsWaiter) { state.ttsWaiter(); state.ttsWaiter = null; }
+  ui.reviewSteps.hidden = true;
   if (state.file) {
     const wake = state.file.wake;
     state.file = null;         // playbackLoop thấy khác tham chiếu thì tự thoát
@@ -441,37 +469,178 @@ function resumePlayback() {
   updateFileUi();
 }
 
-/* Backend đã xử lý xong câu hiện tại chưa?
+/* Đánh thức chuỗi nghe lại khi một lượt TTS kết thúc, dù vì lý do gì.
  *
- * `copilot_done` chỉ nói LLM đã sinh xong — TTS có thể còn đang đọc, và một
- * bản dịch nhiều câu sẽ có nhiều lượt tts_started/tts_done. Vì vậy phải đợi
- * cả hai: LLM xong VÀ không còn lượt TTS nào đang chạy.                     */
+ * Không đợi riêng `tts_done`: nếu TTS lỗi hoặc bị hủy mà ta vẫn đợi thì chuỗi
+ * nghe lại treo và file không bao giờ phát tiếp.                             */
 function noteBusy(type) {
-  if (!state.busy) return;
-  if (type === "copilot_done") state.busy.llmDone = true;
-  else if (type === "tts_started") state.busy.tts += 1;
-  else if (type === "tts_done" || type === "tts_cancelled" || type === "tts_error") {
-    state.busy.tts = Math.max(0, state.busy.tts - 1);
-  } else if (type === "error") state.busy.llmDone = true;
-  else return;
-
-  if (state.busy.llmDone && state.busy.tts === 0) {
-    const done = state.busy;
-    state.busy = null;
-    done.settle = setTimeout(() => {
-      log("file", "câu đã xử lý xong — phát tiếp");
-      resumePlayback();
-    }, 350);   // để tai kịp nghỉ giữa hai câu
+  if (state.ttsWaiter && (type === "tts_done" || type === "tts_cancelled" || type === "tts_error")) {
+    const resolve = state.ttsWaiter;
+    state.ttsWaiter = null;
+    resolve();
+    return;
   }
+  // Pipeline lỗi giữa chừng thì sẽ không có chuỗi nghe lại nào chạy — phát
+  // tiếp để không kẹt vĩnh viễn ở một câu hỏng.
+  if (type === "error" && state.file?.paused && !state.review) {
+    log("file", "câu lỗi — bỏ qua, phát tiếp");
+    resumePlayback();
+  }
+}
+
+/* ------------------ nghe lại một câu, theo thứ tự ---------------------- */
+
+/* Bốn bước: âm thanh GỐC -> bản dịch -> hàm ý -> gợi ý trả lời.
+ *
+ * Server ở chế độ `manual` nên nó không tự đọc gì; client quyết thứ tự. Nếu
+ * để server tự đọc theo §2.4.1 thì bản dịch sẽ phát TRƯỚC cả âm thanh gốc,
+ * vì streaming TTS bắt đầu ngay khi có câu đầu tiên.
+ *
+ * Giọng đổi theo từng đoạn: khung dẫn và hàm ý đọc giọng Việt, còn câu gợi ý
+ * trả lời đọc giọng Anh — đó là ngôn ngữ người dùng sẽ nói ra. Một giọng đọc
+ * cả hai thì phần tiếng Anh nghe rất khó hiểu.                              */
+
+function markStep(step, cls) {
+  ui.reviewSteps.hidden = false;
+  for (const li of ui.reviewSteps.children) {
+    if (li.dataset.step !== step) continue;
+    li.classList.remove("active", "done", "skip");
+    if (cls) li.classList.add(cls);
+  }
+}
+
+function resetSteps() {
+  for (const li of ui.reviewSteps.children) li.classList.remove("active", "done", "skip");
+}
+
+function playOriginal(startS, durationS) {
+  const f = state.file;
+  if (!f?.pcm || durationS <= 0) return Promise.resolve();
+
+  const from = Math.max(0, Math.floor(startS * TARGET_SR));
+  const to = Math.min(f.pcm.length, Math.ceil((startS + durationS) * TARGET_SR));
+  if (to <= from) return Promise.resolve();
+
+  if (!state.playCtx) state.playCtx = new AudioContext();
+  const ctx = state.playCtx;
+  const slice = f.pcm.subarray(from, to);
+  const buffer = ctx.createBuffer(1, slice.length, TARGET_SR);
+  buffer.getChannelData(0).set(slice);
+
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ctx.destination);
+  state.sources.add(source);
+
+  return new Promise((resolve) => {
+    source.onended = () => { state.sources.delete(source); resolve(); };
+    source.start();
+  });
+}
+
+function speakAndWait(text, field, voice) {
+  if (!text?.trim() || state.ws?.readyState !== WebSocket.OPEN) return Promise.resolve();
+  return new Promise((resolve) => {
+    state.ttsWaiter = resolve;
+    state.ws.send(JSON.stringify({ action: "speak", text, field, voice }));
+    // Không để treo vĩnh viễn nếu TTS hỏng mà không phát event nào.
+    setTimeout(() => {
+      if (state.ttsWaiter === resolve) { state.ttsWaiter = null; resolve(); }
+    }, 30000);
+  });
+}
+
+/* Ngôn ngữ của câu gợi ý = ngôn ngữ người nói. Suy từ chính chữ: có dấu tiếng
+ * Việt thì đọc giọng Việt, không thì giọng Anh. Thô sơ nhưng đủ cho hai giọng
+ * đang có, và không cần thêm vòng gọi model nào. */
+const VIET_MARKS = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
+const voiceFor = (text) => (VIET_MARKS.test(text) ? "vi" : "en");
+
+function buildReplySegments(replies) {
+  const usable = replies.filter((r) => r?.text);
+  if (!usable.length) return [];
+
+  // Model 4B đôi khi chỉ sinh 1 reply dù prompt yêu cầu 2 — đọc đúng số thật
+  // chứ không nói cứng "hai lựa chọn" rồi chỉ đọc một.
+  const NUMBERS = ["không", "một", "hai", "ba", "bốn"];
+  const count = NUMBERS[usable.length] || `${usable.length}`;
+  const ordinals = ["Một", "Hai", "Ba", "Bốn"];
+  const segments = [];
+
+  // Gộp các đoạn tiếng Việt liền nhau: mỗi đoạn là một lần khởi động Piper
+  // (~600ms), nên 7 đoạn thành 5 tiết kiệm hơn một giây mỗi câu.
+  let pending = `Có ${count} lựa chọn cho bạn.`;
+  usable.forEach((reply, i) => {
+    pending += ` ${ordinals[i] || i + 1} là:`;
+    segments.push({ text: pending.trim(), voice: "vi" });
+    segments.push({ text: reply.text, voice: voiceFor(reply.text) });
+    pending = reply.purpose ? `Mục đích là ${reply.purpose}.` : "";
+  });
+  if (pending.trim()) segments.push({ text: pending.trim(), voice: "vi" });
+  return segments;
+}
+
+async function runReview(utt) {
+  state.review = utt;
+  resetSteps();
+  ui.reviewSteps.hidden = false;
+
+  try {
+    markStep("original", "active");
+    ui.fileState.textContent = "nghe lại: âm thanh gốc";
+    await playOriginal(utt.startS, utt.durationS);
+    markStep("original", "done");
+
+    if (state.review !== utt) return;
+    const canSpeak = state.ttsEnabled;
+    markStep("translation", utt.translation && canSpeak ? "active" : "skip");
+    if (utt.translation && canSpeak) {
+      ui.fileState.textContent = "nghe lại: bản dịch";
+      await speakAndWait(utt.translation, "translation", "vi");
+      markStep("translation", "done");
+    }
+
+    if (state.review !== utt) return;
+    markStep("intent", utt.intent && canSpeak ? "active" : "skip");
+    if (utt.intent && canSpeak) {
+      ui.fileState.textContent = "nghe lại: hàm ý";
+      await speakAndWait(utt.intent, "intent", "vi");
+      markStep("intent", "done");
+    }
+
+    if (state.review !== utt) return;
+    const segments = canSpeak ? buildReplySegments(utt.replies) : [];
+    markStep("replies", segments.length ? "active" : "skip");
+    ui.fileState.textContent = "nghe lại: gợi ý trả lời";
+    for (const segment of segments) {
+      if (state.review !== utt) return;
+      await speakAndWait(segment.text, "reply", segment.voice);
+    }
+    if (segments.length) markStep("replies", "done");
+  } finally {
+    if (state.review === utt) {
+      state.review = null;
+      ui.fileState.textContent = "nghe lại xong";
+      log("file", "nghe lại xong — phát tiếp");
+      setTimeout(resumePlayback, 300);
+    }
+  }
+}
+
+function maybeStartReview() {
+  // Chỉ chạy ở chế độ nghe lại từng câu khi đang phát file.
+  if (!state.file || !ui.autoPause.checked || !state.utt) return;
+  if (state.review) return;
+  runReview(state.utt);
 }
 
 function beginUtteranceHold() {
   if (!state.file || !ui.autoPause.checked) return;
   // Dừng ngay khi server chốt được một câu, để câu sau không chồng lên.
   // Utterance mới sẽ hủy utterance đang chạy ở backend — đó chính là cái
-  // "loạn" mà chế độ này tránh.
-  pausePlayback("đang chờ xử lý xong câu này");
-  state.busy = { llmDone: false, tts: 0, settle: null };
+  // "loạn" mà chế độ này tránh. Chuỗi nghe lại (runReview) chịu trách nhiệm
+  // phát tiếp khi đã nghe xong cả bốn bước.
+  pausePlayback("đang chờ nghe lại câu này");
 }
 
 async function streamFile(file) {
@@ -508,10 +677,15 @@ async function streamFile(file) {
   for (let i = 0; i < full.length; i += step) chunks.push(full.subarray(i, i + step));
 
   state.file = {
-    name: file.name, chunks, index: 0,
+    name: file.name, chunks, index: 0, pcm: full,
     paused: false, finished: false, heldReason: "", wake: null,
   };
-  state.busy = null;
+  state.utt = null;
+  state.review = null;
+
+  // Chế độ nghe lại: client quyết thứ tự đọc, server không tự chen vào.
+  // Nếu để server tự đọc theo §2.4.1 thì bản dịch sẽ phát TRƯỚC âm thanh gốc.
+  setTtsMode(ui.autoPause.checked ? "manual" : "auto");
   state.running = true;
   ui.toggle.textContent = "Dừng";
   setStatus("đang phát file", "on");
@@ -563,19 +737,30 @@ ui.pauseBtn.onclick = () => {
   const f = state.file;
   if (!f) return;
   if (f.paused) {
-    // Người dùng bấm tiếp tục thì bỏ luôn việc chờ backend.
-    if (state.busy?.settle) clearTimeout(state.busy.settle);
-    state.busy = null;
+    // Bấm tiếp tục thì bỏ luôn chuỗi nghe lại đang dở.
+    state.review = null;
+    stopPlayback();
+    if (state.ws?.readyState === WebSocket.OPEN) {
+      state.ws.send(JSON.stringify({ action: "cancel_tts" }));
+    }
     resumePlayback();
   } else {
     pausePlayback("bạn đã tạm dừng");
   }
 };
 
+function setTtsMode(mode) {
+  if (state.ws?.readyState !== WebSocket.OPEN) return;
+  state.ws.send(JSON.stringify({ action: "set_tts_mode", mode }));
+  log("file", `chế độ TTS: ${mode}`);
+}
+
 ui.autoPause.onchange = () => {
-  if (!ui.autoPause.checked && state.file?.paused) {
-    state.busy = null;
-    resumePlayback();
+  setTtsMode(ui.autoPause.checked ? "manual" : "auto");
+  if (!ui.autoPause.checked) {
+    state.review = null;
+    ui.reviewSteps.hidden = true;
+    if (state.file?.paused) resumePlayback();
   }
 };
 
