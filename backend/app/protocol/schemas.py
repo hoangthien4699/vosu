@@ -84,8 +84,8 @@ class IntentDoneData(_Strict):
 class ReplyReadyData(_Strict):
     index: int = Field(ge=0)
     text: str
-    #: Vì sao người dùng có thể chọn câu này. Rỗng nếu llm.reply_purpose tắt.
-    purpose: str = ""
+    #: Bản dịch tiếng Việt của `text`. Rỗng nếu llm.reply_meaning tắt.
+    meaning: str = ""
 
 
 class TtsStartedData(_Strict):

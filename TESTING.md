@@ -89,7 +89,7 @@ Với mỗi câu, hệ thống phát lại **bốn bước theo thứ tự**:
 | 1 | **Âm thanh gốc** — cắt đúng đoạn của câu đó từ chính file bạn chọn | (file gốc) |
 | 2 | **Bản dịch** | tiếng Việt |
 | 3 | **Hàm ý** | tiếng Việt |
-| 4 | **Gợi ý trả lời**: *"Có hai lựa chọn cho bạn. Một là: … Mục đích là … Hai là: …"* | xen kẽ |
+| 4 | **Gợi ý trả lời**: *"Có hai lựa chọn cho bạn. Một là: … Nghĩa là: … Hai là: …"* | xen kẽ |
 
 Bước 4 đổi giọng theo từng đoạn: khung dẫn và mục đích đọc giọng Việt, còn câu
 gợi ý đọc giọng **Anh** — đó là ngôn ngữ bạn sẽ nói ra. Một giọng đọc cả hai
@@ -110,11 +110,18 @@ chuỗi nghe lại đang dở và phát tiếp ngay.
 Thời lượng thực tế mỗi câu: khoảng **20 giây** (3s bản dịch + 2s hàm ý + 14s
 gợi ý trả lời qua 5 đoạn TTS).
 
-> **Chi phí của trường "mục đích".** §4.4 của đặc tả cố ý bỏ trường mô tả cho
-> từng reply vì token thêm làm tăng latency. Đo lại trên Gemma 3 4B / M4:
-> first-useful-result 198ms → 282ms, tổng thời gian sinh 1759ms → 2972ms
-> (+69%). Tắt bằng `llm.reply_purpose: false` nếu ưu tiên tốc độ cho hội thoại
-> trực tiếp.
+> **Chi phí của trường "nghĩa là".** Đây chính là trường `meaning` mà §4.4 đã
+> bỏ đi ("mỗi reply thêm bản dịch sẽ làm tăng token → tăng latency"). Đưa lại
+> vì người dùng là người Việt, câu gợi ý là tiếng Anh — không biết mình sắp
+> nói gì thì không chọn được. Đo trên Gemma 3 4B / M4: first-useful-result
+> 182ms → 272ms, tổng thời gian sinh 1744ms → 3001ms. Tắt bằng
+> `llm.reply_meaning: false` nếu ưu tiên tốc độ cho hội thoại trực tiếp.
+
+> **`json_schema` là bắt buộc, không phải tối ưu hóa.** Không ràng buộc grammar
+> thì Gemma 3 4B gộp cả hai reply vào một object với khóa trùng lặp và bọc
+> markdown fence — **0/5 câu ra JSON hợp lệ**. Có `json_schema`: **5/5**, đủ 2
+> reply mọi lần. Đổi lại tổng thời gian sinh tăng ~26%. Bật mặc định qua
+> `llm.json_schema`.
 
 Tạm dừng an toàn nhờ một tính chất của kiến trúc: **VAD phía server chạy theo
 frame, không theo đồng hồ thực**. Ngừng gửi audio thì trạng thái VAD đóng băng

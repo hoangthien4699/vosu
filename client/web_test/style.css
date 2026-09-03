@@ -92,7 +92,7 @@ main {
 .steps li.active { border-color: var(--accent); color: var(--accent); }
 .steps li.done   { border-color: var(--ok); color: var(--ok); }
 .steps li.skip   { opacity: .35; text-decoration: line-through; }
-.replies li .purpose {
+.replies li .meaning {
   display: block; margin-top: 4px; font-size: 12px; color: var(--warn);
 }
 .replies li .idx {
