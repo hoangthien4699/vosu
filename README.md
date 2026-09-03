@@ -10,6 +10,26 @@ Toàn bộ xử lý AI chạy **local/offline**.
 
 ---
 
+## Nhánh
+
+| Nhánh | Dùng cho | Khác biệt so với `main` |
+|---|---|---|
+| `main` | Phát triển | Tự nhận diện phần cứng |
+| `release` | Triển khai NVIDIA/CUDA | `config.yaml` ghim `platform: cuda` |
+| `release-mac` | Triển khai macOS (Apple Silicon) | `config.yaml` ghim `platform: macos` |
+
+**Code Python ở ba nhánh giống hệt nhau.** Khác biệt chỉ nằm ở đúng ba file:
+`config.yaml`, `BUILD.md`, và một dòng trong `.gitignore`. Đây là chủ ý: toàn
+bộ khác biệt phần cứng đã được xử lý trong `DeviceProfile` lúc chạy, nên tách
+code theo nhánh sẽ tạo ra hai bản phải bảo trì song song mà không được gì.
+
+Quy trình: sửa trên `main`, rồi `git merge main` vào cả hai nhánh release.
+Vì code không phân kỳ nên merge gần như không bao giờ xung đột.
+
+```bash
+git checkout release-mac && git merge main    # hoặc release
+```
+
 ## Hai build
 
 Một codebase, hai cấu hình phần cứng. Mọi khác biệt đi qua `DeviceProfile`
