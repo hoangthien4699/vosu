@@ -50,6 +50,10 @@ Rules:
 - Natural spoken {target}, not word-for-word.
 - Translate EVERYTHING they said, including short opening remarks. Do not drop
   a sentence or summarise.
+- Read times, dates and numbers the way a person means them out loud: "by
+  three" is three o'clock, not the third day.
+- Keep WHO DOES WHAT exactly as they said it. Never swap who is asking and who
+  is offering.
 - Translate only. Do not answer, explain, or add commentary.{history}"""
 
 _TO_COUNTERPART = """You are a live interpreter for a user wearing earbuds.
@@ -64,17 +68,24 @@ Rules:
 - Write the translation entirely in {target}.
 - Natural spoken {target} that sounds right said out loud in a real
   conversation — not stiff or literal, not written prose.
+- Keep WHO DOES WHAT exactly as the user said it. If the user is asking the
+  other person to do something, the translation must ask them too — never turn
+  a request into an offer, and never swap who helps whom.
+- Vietnamese pronouns like "anh", "em", "chị" mark politeness and who is
+  speaking to whom. Carry that relationship over; do not invert it.
 - Keep it about as long as what the user said. Do not add ideas they did not
   say.
 - Translate only. Do not answer, explain, or add commentary.{history}"""
 
 _HISTORY_RULE = """
 
-Earlier in this conversation (oldest first). "Them" is the other person, "You"
-is the user. Use it to resolve pronouns like "it" or "that one" and to keep the
-thread. Only the line after "Now" is being asked about.
+=== CONTEXT ONLY — DO NOT TRANSLATE ANY LINE BELOW ===
+Earlier turns, oldest first. "Them" is the other person, "You" is the user.
+Use these only to resolve pronouns like "it" or "that one" and to keep the
+thread.
 
-{history}"""
+{history}
+=== END OF CONTEXT ==="""
 
 
 def system_prompt(
@@ -150,11 +161,38 @@ GEMMA = PromptTemplate(
     _turn="<start_of_turn>user\n{content}<end_of_turn>\n<start_of_turn>model\n",
 )
 
-TEMPLATES: dict[str, PromptTemplate] = {t.name: t for t in (CHATML, GEMMA)}
+# Qwen3 / Qwen3.5: ChatML, nhưng có chế độ "thinking".
+#
+# Chat template chính thức tắt thinking bằng cách ĐIỀN SẴN một khối rỗng
+# `<think>\n\n</think>\n\n` ngay đầu lượt assistant. Nếu không điền, model tự
+# sinh `<think>` và suy nghĩ dài dòng — với dịch câu ngắn thì đó là latency
+# thuần túy, không được gì.
+#
+# Grammar GBNF cũng chặn được thinking (nó ép ký tự đầu là `{`), nhưng lúc đó
+# model đang bị bẻ ngược ý định của nó. Điền sẵn khối rỗng thì model biết mình
+# đang ở chế độ không suy nghĩ và đi thẳng vào việc.
+QWEN3 = PromptTemplate(
+    name="qwen3",
+    stop=("<|im_end|>", "<|im_start|>"),
+    system_in_user_turn=False,
+    _turn=(
+        "<|im_start|>system\n{system}<|im_end|>\n"
+        "<|im_start|>user\n{user}<|im_end|>\n"
+        "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    ),
+)
+
+TEMPLATES: dict[str, PromptTemplate] = {t.name: t for t in (CHATML, GEMMA, QWEN3)}
 
 #: Nhận diện họ model từ tên file GGUF khi `llm.prompt_template = "auto"`.
+#: Thứ tự QUAN TRỌNG: "qwen3" phải đứng trước "qwen", nếu không mọi model Qwen
+#: đều rơi vào ChatML và Qwen3 sẽ suy nghĩ lan man.
+#:
+#: Lưu ý: các bản `-instruct-2507` của Qwen3 KHÔNG có thinking — với chúng nên
+#: đặt `llm.prompt_template: chatml` tường minh.
 _FILENAME_HINTS = (
     ("gemma", GEMMA),
+    ("qwen3", QWEN3),
     ("qwen", CHATML),
     ("chatml", CHATML),
 )
@@ -237,7 +275,13 @@ def build_prompt(
         history=history,
     )
     speaker = "You" if direction is Direction.TO_COUNTERPART else "Them"
-    user = f'Now {speaker} said:\n{text}'
+    # Phân định thật rõ câu cần dịch với khối lịch sử. Model 2B đã từng dịch
+    # nhầm một dòng trong lịch sử thay vì câu hiện tại — với ranh giới mờ thì
+    # model càng nhỏ càng dễ lạc.
+    user = (
+        f"TRANSLATE EXACTLY THIS ONE LINE, nothing else.\n"
+        f"{speaker} said: {text}"
+    )
     return template.render(system, user)
 
 

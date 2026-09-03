@@ -152,8 +152,10 @@ def test_chieu_nguoc_theo_dung_tieng_doi_phuong_that():
 def test_prompt_danh_dau_ai_dang_noi():
     to_user = build_prompt("Hello.", "en", GEMMA, direction=Direction.TO_USER)
     to_them = build_prompt("Xin chào.", "vi", GEMMA, direction=Direction.TO_COUNTERPART)
-    assert "Now Them said:" in to_user
-    assert "Now You said:" in to_them
+    assert "Them said:" in to_user
+    assert "You said:" in to_them
+    # ranh giới phải rõ, model 2B từng dịch nhầm một dòng trong lịch sử
+    assert "TRANSLATE EXACTLY THIS ONE LINE" in to_user
 
 
 def test_lich_su_nam_trong_system_prompt_de_giu_prefix_cache():
@@ -167,7 +169,8 @@ def test_lich_su_nam_trong_system_prompt_de_giu_prefix_cache():
         direction=Direction.TO_USER,
         history='Them: "Chúng ta nên hoãn lại."',
     )
-    assert prompt.index("Chúng ta nên hoãn lại") < prompt.index("Now Them said:")
+    assert prompt.index("Chúng ta nên hoãn lại") < prompt.index("Them said:")
+    assert "DO NOT TRANSLATE ANY LINE BELOW" in prompt
 
 
 def test_khong_co_lich_su_thi_khong_co_khoi_context():
@@ -183,3 +186,33 @@ def test_ten_ngon_ngu_dich_sang_tieng_anh_cho_model_hieu():
     assert language_name("ja") == "Japanese"
     assert language_name(None) == "English"
     assert language_name("xx") == "xx"      # không biết thì giữ nguyên mã
+
+
+def test_qwen3_dien_san_khoi_think_rong():
+    """Qwen3/3.5 tắt thinking bằng cách điền sẵn `<think></think>` rỗng.
+
+    Không điền thì model tự sinh `<think>` và suy nghĩ dài dòng — với dịch câu
+    ngắn đó là latency thuần túy, không được gì.
+    """
+    from app.ai.llm import QWEN3
+
+    prompt = build_prompt("Hello.", "en", QWEN3)
+    assert prompt.endswith("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+    assert QWEN3.stop == ("<|im_end|>", "<|im_start|>")
+
+
+@pytest.mark.parametrize(
+    "gguf,expected",
+    [
+        ("models/qwen3.5-2b-q8_0.gguf", "qwen3"),
+        ("models/Qwen3-4B-Q4_K_M.gguf", "qwen3"),
+        ("models/qwen2.5-3b-instruct-q4_k_m.gguf", "chatml"),
+        ("models/gemma-3-4b-it-q4_k_m.gguf", "gemma"),
+    ],
+)
+def test_auto_phan_biet_qwen3_voi_qwen2(gguf, expected):
+    """"qwen3" phải khớp TRƯỚC "qwen", nếu không Qwen3 rơi vào ChatML."""
+    cfg = load_config(env={})
+    cfg.paths.llm_gguf = gguf
+    cfg.llm.prompt_template = "auto"
+    assert resolve_template(cfg).name == expected
