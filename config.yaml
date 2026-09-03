@@ -56,12 +56,14 @@ llm:
   # BẮT BUỘC với Gemma 3 (sliding-window attention): thiếu cờ này thì mỗi
   # utterance xử lý lại toàn bộ system prompt, TTFT tệ đi 7 lần.
   swa_full: true
+  # Bộ nhớ hội thoại (§10). 0 = tắt, mỗi câu dịch biệt lập.
+  history_turns: 6
+  history_chars: 1200
 
 tts:
   enabled: true
   voice: vi
   auto_read_translation: true
-  auto_read_intent: false
   auto_read_replies: false
   stream_by_sentence: true
   realtime_pacing: true
