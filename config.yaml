@@ -49,12 +49,17 @@ llm:
   host: 127.0.0.1
   port: 8080
   n_ctx: 2048
-  n_predict: 160
+  n_predict: 96
   temperature: 0.2
   n_gpu_layers: null         # null -> DeviceProfile cuda = 36
   prompt_template: auto      # auto suy từ tên file GGUF
   # BẮT BUỘC với Gemma 3 (sliding-window attention): thiếu cờ này thì mỗi
   # utterance xử lý lại toàn bộ system prompt, TTFT tệ đi 7 lần.
+  # Ràng buộc output bằng GBNF grammar. JSON Schema chỉ kiểm soát cấu trúc,
+  # không cấm được `}` hay dấu ngoặc cong BÊN TRONG chuỗi: 0/6 vs 6/6 sạch.
+  grammar: true
+  # Chống lặp: model từng kẹt sinh `”}”}”}...` tới hết n_predict.
+  repeat_penalty: 1.15
   swa_full: true
   # Bộ nhớ hội thoại (§10). 0 = tắt, mỗi câu dịch biệt lập.
   history_turns: 6
@@ -64,7 +69,9 @@ tts:
   enabled: true
   voice: vi
   auto_read_translation: true
-  auto_read_replies: false
+  # Tốc độ đọc chiều NGƯỢC (bạn nói tiếng Việt -> đọc tiếng đối phương).
+  # Chậm hơn hẳn vì bạn phải nói theo. Lớn hơn = chậm hơn.
+  coach_length_scale: 1.35
   stream_by_sentence: true
   realtime_pacing: true
 
@@ -74,6 +81,11 @@ vram:
   on_exceed: warn            # đổi sang `reject` nếu muốn từ chối phiên mới
 
 session:
+  # Ngôn ngữ CỦA BẠN. Whisper nhận ra tiếng này thì hiểu là bạn đang nói và
+  # dịch NGƯỢC sang tiếng đối phương rồi đọc chậm để bạn nói theo.
+  user_language: vi
+  # Chỉ là mặc định ban đầu; sau khi nghe họ nói thì lấy theo thực tế.
+  counterpart_language: en
   max_concurrent_sessions: 1
   idle_timeout_s: 180.0
 
