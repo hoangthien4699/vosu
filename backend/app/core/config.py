@@ -107,6 +107,11 @@ class LlmConfig:
     health_poll_interval_s: float = 0.25
     request_timeout_s: float = 20.0
     continuous_batching: bool = True
+    # Định dạng lượt hội thoại: auto | chatml | gemma
+    #
+    # "auto" suy từ tên file GGUF. Dùng SAI template thì model vẫn sinh chữ,
+    # chỉ là chất lượng tệ đi khó truy vết — không có lỗi nào được ném ra.
+    prompt_template: str = "auto"
     extra_args: list[str] = field(default_factory=list)
 
     @property

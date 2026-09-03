@@ -9,6 +9,10 @@ testpaths = ["tests"]
 pythonpath = ["backend", "."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# Test treo là lỗi, không phải "đang chạy lâu". Không có mốc này, một bản giả
+# lập lệch interface có thể làm cả bộ test đứng im vô hạn — đã xảy ra thật khi
+# FakeLlm thiếu build_prompt.
+timeout = 60
 filterwarnings = ["error::DeprecationWarning:app.*"]
 
 [tool.ruff]

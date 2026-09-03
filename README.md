@@ -199,6 +199,39 @@ backend/app/
 └── api/       websocket.py
 ```
 
+### Model LLM: Gemma 3 4B, không phải Qwen2.5-3B
+
+Đặc tả v4.1.0 chọn Qwen2.5-3B. Khi chạy thật, Qwen rò tiếng Trung vào bản dịch
+tiếng Việt — quan sát trực tiếp: `"Tôi nghĩ chúng ta nên推迟这次讨论目前。"`.
+Model 3B lượng tử 4-bit không giữ vững ngôn ngữ đích. Gemma 3 hỗ trợ đa ngôn
+ngữ tốt hơn đáng kể.
+
+Đổi model **không phải đổi code**: prompt template là dữ liệu, chọn theo
+`llm.prompt_template` (`auto` suy từ tên file GGUF). Quay lại Qwen là một dòng
+trong `config.yaml`.
+
+| | Qwen2.5-3B | Gemma 3 4B |
+|---|---|---|
+| File Q4_K_M | 2.0 GB | 2.3 GB |
+| Template | ChatML | `<start_of_turn>`, **không có vai trò system** |
+| Stop token | `<\|im_end\|>` | `<end_of_turn>` |
+
+So sánh khách quan trên chính prompt của dự án:
+
+```bash
+python -m benchmarks.compare_models \
+    --model models/gemma-3-4b-it-q4_k_m.gguf \
+    --model models/qwen2.5-3b-instruct-q4_k_m.gguf
+```
+
+Công cụ này đếm tỷ lệ rò ký tự CJK trong bản dịch, tỷ lệ JSON hợp lệ, và
+TTFT/total cho từng model.
+
+> **Cảnh báo VRAM:** +0.36GB nghe nhỏ, nhưng ngân sách ở §3.1 tính cho Qwen và
+> đã sát mép 5.5GB. **Bắt buộc chạy lại B4 trên phần cứng NVIDIA** trước khi
+> coi Gemma là lựa chọn chốt. Nếu vượt trần: hạ Whisper xuống `base`, giảm
+> `n_ctx`, hoặc quay lại Qwen.
+
 ### Bảy quyết định đáng biết trước khi sửa code
 
 **1. `1.5s` là ngưỡng partial, KHÔNG phải speech boundary.**
@@ -270,12 +303,6 @@ Những test đáng đọc trước khi sửa code:
 ---
 
 ## Còn chưa giải quyết
-
-**Qwen2.5-3B rò tiếng Trung vào bản dịch tiếng Việt.** Quan sát thật khi chạy
-LLM: `"Tôi nghĩ chúng ta nên推迟这次讨论目前。"`. Model 3B lượng tử hóa 4-bit
-không giữ vững ngôn ngữ đích. Đây là vấn đề model/prompt, không phải lỗi code —
-parser vẫn hoạt động đúng. Cần thử: siết prompt, thêm few-shot tiếng Việt, hoặc
-đánh giá model khác. Nên xử lý trước khi demo.
 
 Hai rủi ro chỉ mới có kế hoạch đo, chưa có lời giải kỹ thuật:
 

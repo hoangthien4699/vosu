@@ -57,7 +57,7 @@ class EventLoopMonitor:
 
 
 async def _run(args) -> BenchmarkResult:
-    from app.ai.llm import LlmClient, build_prompt
+    from app.ai.llm import LlmClient
     from app.ai.stt import SttEngine
     from app.ai.tts import PiperTts, TtsUnavailable
     from app.core.config import load_config
@@ -130,7 +130,7 @@ async def _run(args) -> BenchmarkResult:
             return
         for i in range(runs):
             started = time.perf_counter()
-            await client.complete(build_prompt(f"Sample utterance number {i}.", "en"))
+            await client.complete(client.build_prompt(f"Sample utterance number {i}.", "en"))
             progress(f"LLM {i+1}/{runs} — {(time.perf_counter()-started)*1000:.0f}ms")
 
     async def tts_load() -> None:

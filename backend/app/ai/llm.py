@@ -28,21 +28,104 @@ Schema:
 {"translation":"<Vietnamese translation>","intent":"<speaker intent, max 10 words>","replies":["<short reply the user can say>","<a second, different reply>"]}
 
 Rules:
-- "translation" is Vietnamese. Keep it natural, not literal.
+- "translation" MUST be written entirely in Vietnamese, using only Vietnamese
+  words and Vietnamese diacritics. Never leave any word in the source language,
+  and never use Chinese characters. Keep it natural, not literal.
 - "intent" explains what the speaker actually wants. Vietnamese, under 10 words.
 - "replies" are in the SAME language the speaker used, so the user can say them back.
 - Exactly 2 replies. Keep each under 15 words.
 - Output the JSON immediately. Do not explain."""
 
 
-def build_prompt(text: str, language: str | None) -> str:
-    """Prompt template ChatML của Qwen2.5."""
-    lang = language or "unknown"
-    return (
-        f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n"
-        f"<|im_start|>user\nLanguage: {lang}\nSpeech: \"{text}\"<|im_end|>\n"
-        f"<|im_start|>assistant\n"
+# --------------------------------------------------------------------------- #
+# Prompt template theo họ model
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class PromptTemplate:
+    """Cách gói system + user thành prompt thô cho `/completion`.
+
+    Mỗi họ model có định dạng lượt hội thoại riêng, và dùng SAI định dạng thì
+    model vẫn sinh ra chữ — chỉ là chất lượng tệ đi một cách khó truy vết, chứ
+    không báo lỗi. Vì vậy template phải là dữ liệu tường minh, không hardcode.
+    """
+
+    name: str
+    stop: tuple[str, ...]
+    #: True nếu họ model không có vai trò `system` riêng — chỉ dẫn hệ thống
+    #: phải gộp vào lượt user đầu tiên.
+    system_in_user_turn: bool
+    _turn: str
+
+    def render(self, system: str, user: str) -> str:
+        if self.system_in_user_turn:
+            return self._turn.format(content=f"{system}\n\n{user}")
+        return self._turn.format(system=system, user=user)
+
+
+CHATML = PromptTemplate(
+    name="chatml",
+    stop=("<|im_end|>", "<|im_start|>"),
+    system_in_user_turn=False,
+    _turn=(
+        "<|im_start|>system\n{system}<|im_end|>\n"
+        "<|im_start|>user\n{user}<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    ),
+)
+
+# Gemma 2/3: không có vai trò `system`, và KHÔNG tự thêm <bos> ở đây —
+# llama-server đã tokenize prompt với add_special=true nên tự chèn BOS. Thêm
+# tay nữa sẽ thành BOS kép, làm chất lượng tụt mà không có dấu hiệu gì.
+GEMMA = PromptTemplate(
+    name="gemma",
+    stop=("<end_of_turn>", "<start_of_turn>"),
+    system_in_user_turn=True,
+    _turn="<start_of_turn>user\n{content}<end_of_turn>\n<start_of_turn>model\n",
+)
+
+TEMPLATES: dict[str, PromptTemplate] = {t.name: t for t in (CHATML, GEMMA)}
+
+#: Nhận diện họ model từ tên file GGUF khi `llm.prompt_template = "auto"`.
+_FILENAME_HINTS = (
+    ("gemma", GEMMA),
+    ("qwen", CHATML),
+    ("chatml", CHATML),
+)
+
+
+def resolve_template(config) -> PromptTemplate:
+    """Chọn template theo config; `auto` thì suy ra từ tên file GGUF."""
+    requested = (config.llm.prompt_template or "auto").lower()
+    if requested != "auto":
+        template = TEMPLATES.get(requested)
+        if template is None:
+            valid = ", ".join(sorted(TEMPLATES))
+            raise ValueError(
+                f"llm.prompt_template không hợp lệ: {requested!r}. Hợp lệ: auto, {valid}"
+            )
+        return template
+
+    name = str(config.paths.llm_gguf).lower()
+    for hint, template in _FILENAME_HINTS:
+        if hint in name:
+            return template
+
+    logger.warning(
+        "Không suy được prompt template từ %r — mặc định ChatML. "
+        "Đặt llm.prompt_template tường minh nếu model dùng định dạng khác.",
+        config.paths.llm_gguf,
     )
+    return CHATML
+
+
+def build_prompt(
+    text: str, language: str | None, template: PromptTemplate = CHATML
+) -> str:
+    lang = language or "unknown"
+    user = f'Language: {lang}\nSpeech: "{text}"'
+    return template.render(SYSTEM_PROMPT, user)
 
 
 @dataclass
@@ -62,6 +145,16 @@ class LlmClient:
     def __init__(self, config) -> None:
         self._config = config
         self._client: httpx.AsyncClient | None = None
+        self.template = resolve_template(config)
+        logger.info(
+            "LLM prompt template: %s (stop: %s)",
+            self.template.name,
+            ", ".join(self.template.stop),
+        )
+
+    def build_prompt(self, text: str, language: str | None) -> str:
+        """Prompt đúng định dạng của model đang nạp."""
+        return build_prompt(text, language, self.template)
 
     async def start(self) -> None:
         if self._client is None:
@@ -110,7 +203,9 @@ class LlmClient:
             "n_predict": n_predict if n_predict is not None else cfg.n_predict,
             "stream": True,
             "cache_prompt": True,
-            "stop": ["<|im_end|>", "<|im_start|>"],
+            # Stop token theo họ model — dùng nhầm bộ của họ khác thì model
+            # chạy tới hết n_predict và JSON bị cắt cụt.
+            "stop": list(self.template.stop),
         }
 
         started = time.perf_counter()
