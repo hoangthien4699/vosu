@@ -65,6 +65,31 @@ File được phát qua **đúng đường mà micro đi** — cùng resample v�
 chunk 100ms, cùng WebSocket — nên nó kiểm chứng pipeline thật, không phải
 đường tắt.
 
+#### Chế độ "từng câu một" (bật mặc định)
+
+Với file có nhiều câu, phát liên tục sẽ khiến câu sau đến khi câu trước còn
+đang xử lý — backend hủy utterance cũ để nhường utterance mới, và kết quả trên
+màn hình bị thay giữa chừng. Đo trên file 3 câu:
+
+| | Phát liên tục | Từng câu một |
+|---|---|---|
+| Câu nhận diện | 3 | 3 |
+| **TTS bị hủy giữa chừng** | **1** | **0** |
+| Thời gian | 14s | 26s |
+
+Khi bật, hệ thống **tự dừng phát ngay khi chốt được một câu**, và chỉ phát tiếp
+sau khi câu đó xử lý xong hoàn toàn — nghĩa là LLM sinh xong **và** không còn
+lượt TTS nào đang đọc. Chờ mỗi `copilot_done` là chưa đủ: một bản dịch nhiều
+câu sẽ có nhiều lượt `tts_started`/`tts_done`.
+
+Nút **"Tạm dừng"** cho bạn kiểm soát tay bất cứ lúc nào. Bấm "Tiếp tục" sẽ bỏ
+qua việc chờ backend.
+
+Tạm dừng an toàn nhờ một tính chất của kiến trúc: **VAD phía server chạy theo
+frame, không theo đồng hồ thực**. Ngừng gửi audio thì trạng thái VAD đóng băng
+nguyên vẹn, gửi tiếp là chạy đúng chỗ cũ — không mất câu, không cắt nhầm biên.
+Đã kiểm chứng: cả hai chế độ đều nhận diện đúng 3/3 câu.
+
 **Cách B — micro thật:**
 
 1. Bấm **"Bắt đầu nghe"**, cho phép trình duyệt dùng micro

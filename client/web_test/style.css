@@ -61,3 +61,21 @@ main {
 .log .k.tts { color: var(--ok); }
 .log .k.cancel { color: var(--warn); }
 .log .k.err { color: var(--err); }
+
+/* --- điều khiển phát file --- */
+.check {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--dim); cursor: pointer;
+  border: 1px solid var(--line); border-radius: 7px; padding: 7px 11px;
+}
+.check input { accent-color: var(--accent); cursor: pointer; }
+.progress {
+  height: 6px; background: var(--line); border-radius: 3px;
+  overflow: hidden; margin-bottom: 9px;
+}
+.progress > div {
+  height: 100%; width: 0; background: var(--accent);
+  transition: width .12s linear;
+}
+.progress > div.held { background: var(--warn); }
+#fileState { margin-left: auto; }

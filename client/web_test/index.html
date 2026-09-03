@@ -14,11 +14,24 @@
     <button id="toggle">Bắt đầu nghe</button>
     <button id="pickFile" class="ghost" title="Phát một file audio thay cho micro">Phát file…</button>
     <input id="fileInput" type="file" accept="audio/*" hidden>
+    <button id="pauseBtn" class="ghost" hidden>Tạm dừng</button>
+    <label id="autoPauseWrap" class="check" hidden title="Dừng sau mỗi câu, chờ xử lý xong mới phát tiếp">
+      <input id="autoPause" type="checkbox" checked> từng câu một
+    </label>
     <button id="stopTts" class="ghost" disabled>Dừng đọc</button>
   </div>
 </header>
 
 <main>
+  <section class="panel wide" id="filePanel" hidden>
+    <h2>Phát file <small id="fileName"></small></h2>
+    <div class="progress"><div id="fileBar"></div></div>
+    <div class="meta">
+      <span id="filePos">—</span>
+      <span id="fileState"></span>
+    </div>
+  </section>
+
   <section class="panel">
     <h2>Đang nghe <small id="utteranceId"></small></h2>
     <p id="partial" class="partial" aria-live="polite">…</p>

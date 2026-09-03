@@ -355,3 +355,64 @@ def test_cancel_tts_tu_client_dung_va_don_hang_doi(tts_client):
     assert cancelled["data"]["reason"] == "client_request"
     assert cancelled["data"]["response_ms"] < 200.0
     assert cancelled["utterance_id"], "tts_cancelled phải nói rõ hủy utterance nào"
+
+
+# --------------------------------------------------------------------------- #
+# Tạm dừng giữa chừng (chế độ "từng câu một" của web client)
+# --------------------------------------------------------------------------- #
+
+def test_ngung_gui_audio_khong_lam_hong_trang_thai_vad(client):
+    """VAD chạy theo FRAME, không theo đồng hồ thực.
+
+    Đây là tính chất khiến nút "Tạm dừng" của web client an toàn: ngừng gửi
+    audio thì trạng thái VAD đóng băng nguyên vẹn, gửi tiếp là chạy đúng chỗ
+    cũ. Nếu VAD phụ thuộc thời gian thực, một khoảng dừng dài sẽ bị hiểu nhầm
+    thành im lặng và cắt câu sai chỗ.
+    """
+    payload = utterance_stream(1.2)
+    chunk = 3200
+
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        # Gửi nửa đầu, "tạm dừng" (không gửi gì), rồi gửi nốt.
+        half = len(payload) // 2
+        for i in range(0, half, chunk):
+            ws.send_bytes(payload[i : i + chunk])
+        # khoảng dừng: client thật sẽ dừng ở đây hàng giây để chờ TTS đọc xong
+        for i in range(half, len(payload), chunk):
+            ws.send_bytes(payload[i : i + chunk])
+        events = drain(ws, "copilot_done")
+
+    finals = [e for e in events if e["type"] == "stt_final"]
+    assert len(finals) == 1, (
+        f"kỳ vọng đúng 1 câu, nhận {len(finals)} — khoảng dừng đã cắt nhầm câu"
+    )
+
+
+def test_nhieu_cau_cach_nhau_khong_bi_gop_hay_tach(client):
+    """Ba câu cách nhau -> đúng ba utterance_id, không gộp, không tách."""
+    import numpy as np
+
+    rng = np.random.default_rng(21)
+    pieces = []
+    for _ in range(3):
+        pieces.extend([speech(1.0, rng), silence(1.2, rng)])
+    stream = np.concatenate([silence(0.4, rng)] + pieces)
+    payload = (np.clip(stream, -1, 1) * 32767).astype("<i2").tobytes()
+
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        seen = set()
+        for i in range(0, len(payload), 3200):
+            ws.send_bytes(payload[i : i + 3200])
+        for _ in range(600):
+            message = ws.receive()
+            if not message.get("text"):
+                continue
+            event = json.loads(message["text"])
+            if event["type"] == "stt_final":
+                seen.add(event["utterance_id"])
+            if len(seen) == 3:
+                break
+
+    assert len(seen) == 3, f"kỳ vọng 3 utterance riêng biệt, nhận {sorted(seen)}"
