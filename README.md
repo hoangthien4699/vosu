@@ -271,6 +271,41 @@ model không dùng SWA — đã kiểm chứng Qwen vẫn chạy bình thường
 > NVIDIA** trước khi coi Gemma là lựa chọn chốt. Nếu vượt trần: hạ Whisper
 > xuống `base`, giảm `n_ctx`, hoặc quay lại Qwen.
 
+### Bộ nhớ hội thoại
+
+§10 của đặc tả xếp context hẹp là "không phải blocker ở MVP" nhưng nói rõ phải
+giải quyết "khi mở rộng sang hội thoại nhiều lượt (rolling summary + short
+context)". Đã làm phần đó.
+
+Không có nó, mỗi câu được dịch biệt lập — đại từ không phân giải được và gợi ý
+trả lời không bám mạch. Đo thật trên một hội thoại 3 lượt:
+
+| Câu | Không lịch sử | Có lịch sử |
+|---|---|---|
+| *"What do you think about that?"* | *"I was just considering the options."* | *"I'm a little concerned about the delay."* |
+| *"It would give the team more time to test it properly."* | *"Could you elaborate on what 'properly' means?"* | *"That's a valid point, let's discuss the testing plan."* |
+
+Cửa sổ trượt 6 lượt / 1200 ký tự, ghi cả câu người dùng **đã chọn** — chọn một
+gợi ý là tín hiệu mạnh nhất về việc họ thực sự đáp lại thế nào.
+
+Vị trí trong prompt quyết định hiệu quả cache:
+
+```
+[system prompt]   [lịch sử]      [câu hiện tại]
+ cố định           chỉ mọc        đổi mỗi lượt
+                   thêm ở cuối
+```
+
+Lịch sử chỉ nối thêm ở cuối nên tiền tố của lượt trước vẫn dùng lại được. Đặt
+nó sau câu hiện tại, hoặc chèn vào giữa system prompt, sẽ phá cache và đẩy TTFT
+lên nhiều lần. Tắt bằng `llm.history_turns: 0`.
+
+### Trường `intent` đã bỏ
+
+§4.3 và §4.4 có `intent`/`intent_done`. Đã gỡ khỏi prompt, JSON schema, event
+protocol và UI theo yêu cầu sản phẩm: người dùng chỉ cần bản dịch câu đối
+phương nói, phần giải thích hàm ý là thừa và tốn token.
+
 ### Bảy quyết định đáng biết trước khi sửa code
 
 **1. `1.5s` là ngưỡng partial, KHÔNG phải speech boundary.**

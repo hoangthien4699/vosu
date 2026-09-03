@@ -24,7 +24,6 @@ from tests.synth import SR, silence, speech
 LLM_OUTPUT = json.dumps(
     {
         "translation": "Tôi nghĩ chúng ta nên tạm gác lại việc này.",
-        "intent": "muốn hoãn thảo luận",
         "replies": ["Understood. When can we revisit?", "Is there a blocker?"],
     },
     ensure_ascii=False,
@@ -53,10 +52,12 @@ class FakeLlm:
         self.chunk = chunk
         self.template = CHATML
         self.prompts: list[str] = []
+        self.histories: list[str] = []
 
-    def build_prompt(self, text, language):
-        prompt = build_prompt(text, language, self.template)
+    def build_prompt(self, text, language, history=""):
+        prompt = build_prompt(text, language, self.template, history=history)
         self.prompts.append(prompt)
+        self.histories.append(history)
         return prompt
 
     async def stream(self, prompt, *, stats=None, n_predict=None):
@@ -132,7 +133,6 @@ def test_luong_e2e_day_du(client):
     assert "stt_final" in types
     assert "copilot_started" in types
     assert "translation_delta" in types
-    assert "intent_done" in types
     assert "reply_ready" in types
     assert types[-1] == "copilot_done"
 
@@ -148,7 +148,7 @@ def test_moi_event_du_truong_bat_buoc(client):
 
     utterance_scoped = {
         "stt_final", "copilot_started", "copilot_done",
-        "translation_delta", "intent_done", "reply_ready",
+        "translation_delta", "reply_ready",
     }
     for event in events:
         assert event["session_id"].startswith("sess_")
@@ -481,8 +481,9 @@ def test_manual_roi_client_yeu_cau_doc_theo_thu_tu(tts_client):
             ws.send_bytes(payload[i : i + 3200])
         drain(ws, "copilot_done", limit=400)
 
-        for field, text in (("translation", "Bản dịch."), ("intent", "Hàm ý."),
-                            ("reply", "Two options for you.")):
+        for field, text in (("translation", "Bản dịch."),
+                            ("reply", "Two options for you."),
+                            ("reply", "One more thing.")):
             ws.send_text(json.dumps({"action": "speak", "field": field, "text": text}))
 
         seen = []
@@ -497,7 +498,8 @@ def test_manual_roi_client_yeu_cau_doc_theo_thu_tu(tts_client):
                 break
 
     assert seen == [
-        ("translation", "Bản dịch."), ("intent", "Hàm ý."), ("reply", "Two options for you."),
+        ("translation", "Bản dịch."), ("reply", "Two options for you."),
+        ("reply", "One more thing."),
     ], f"thứ tự đọc sai: {seen}"
 
 
@@ -514,3 +516,85 @@ def test_stt_final_co_vi_tri_cau_trong_stream(client):
     start_s = final["data"]["start_s"]
     # client chèn 0.4s im lặng trước khi nói (xem utterance_stream)
     assert 0.1 < start_s < 0.9, f"start_s={start_s} không khớp vị trí thật của câu"
+
+
+# --------------------------------------------------------------------------- #
+# Bộ nhớ hội thoại (§10)
+# --------------------------------------------------------------------------- #
+
+def send_utterance(ws, seconds: float = 1.2) -> list[dict]:
+    payload = utterance_stream(seconds)
+    for i in range(0, len(payload), 3200):
+        ws.send_bytes(payload[i : i + 3200])
+    return drain(ws, "copilot_done", limit=400)
+
+
+def test_cau_dau_tien_khong_co_lich_su(client):
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        send_utterance(ws)
+    assert client.app.state.runtime.llm.histories[0] == "", (
+        "câu đầu tiên mà đã có lịch sử thì model sẽ thấy chính nó lặp lại"
+    )
+
+
+def test_cau_sau_nhin_thay_cau_truoc(client):
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        send_utterance(ws)
+        send_utterance(ws)
+    histories = client.app.state.runtime.llm.histories
+    assert len(histories) == 2
+    assert "Them:" in histories[1], f"lượt 2 không thấy lượt 1: {histories[1]!r}"
+    assert "I think we should table this" in histories[1]
+
+
+def test_lich_su_khong_chua_chinh_cau_dang_hoi(client):
+    """Câu hiện tại đã nằm ở phần "Now they said" — lặp lại là model tưởng
+    người ta nói hai lần."""
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        send_utterance(ws)
+        send_utterance(ws)
+        prompt = client.app.state.runtime.llm.prompts[-1]
+
+    marker = "Now they said:"
+    assert prompt.count(marker) == 1
+    before, after = prompt.split(marker)
+    # cùng một câu (FakeStt luôn trả về cùng transcript) nên đếm số lần xuất hiện
+    assert before.count("I think we should table this") == 1, (
+        "câu hiện tại xuất hiện trong lịch sử lẫn phần hỏi"
+    )
+
+
+def test_cau_nguoi_dung_chon_di_vao_lich_su(client):
+    """Chọn một gợi ý là tín hiệu mạnh nhất về việc người dùng đáp lại thế nào."""
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        send_utterance(ws)
+        ws.send_text(json.dumps({
+            "action": "speak_reply", "reply_index": 0, "text": "Understood, thanks.",
+        }))
+        ws.send_text(json.dumps({"action": "ping"}))
+        send_utterance(ws)
+        history = client.app.state.runtime.llm.histories[-1]
+
+    assert 'You: "Understood, thanks."' in history, history
+
+
+def test_reset_xoa_lich_su(client):
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        send_utterance(ws)
+        ws.send_text(json.dumps({"action": "reset"}))
+        send_utterance(ws)
+    assert client.app.state.runtime.llm.histories[-1] == ""
+
+
+def test_tat_lich_su_thi_prompt_khong_doi(client):
+    client.app.state.config.llm.history_turns = 0
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        send_utterance(ws)
+        send_utterance(ws)
+    assert all(h == "" for h in client.app.state.runtime.llm.histories)
