@@ -22,13 +22,13 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 
 import numpy as np
 
-from .vad import VadEventType, VadProcessor
+from .vad import VadEvent, VadEventType, VadProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,7 @@ class AudioChunker:
         max_utterance_s: float = 30.0,
         enable_partial: bool = True,
         preroll_ms: int = 300,
+        on_vad_event: Callable[[VadEvent], None] | None = None,
     ) -> None:
         self._vad = vad
         self.sample_rate = vad.sample_rate
@@ -107,6 +108,10 @@ class AudioChunker:
         self._acc = _Accumulator()
         self._active = False
         self._stream_s = 0.0
+        # Hook để tầng trên nhận speech_started ngay lập tức — Barge-in
+        # (§2.4.1) phải phản ứng trong <200ms, không thể đợi tới khi có
+        # segment audio hoàn chỉnh.
+        self._on_vad_event = on_vad_event
         # VAD chỉ khẳng định speech sau `min_speech_ms`, và backdate mốc bắt đầu.
         # Không có pre-roll thì phần đầu từ đầu tiên đã bị vứt mất -> Whisper
         # nghe hụt phụ âm đầu.
@@ -140,6 +145,8 @@ class AudioChunker:
             self._stream_s += frame_s
 
             for event in events:
+                if self._on_vad_event is not None:
+                    self._on_vad_event(event)
                 if event.type is VadEventType.SPEECH_STARTED:
                     self._acc.clear()
                     self._acc.start_s = event.timestamp_s
