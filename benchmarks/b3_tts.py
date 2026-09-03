@@ -23,6 +23,11 @@ async def _run(args) -> BenchmarkResult:
     config = load_config()
     result = BenchmarkResult("B3", "TTS riêng lẻ (Piper, CPU)")
 
+    # Tắt pacing: benchmark này đo TỐC ĐỘ TỔNG HỢP của Piper, còn pacing là
+    # nhịp PHÁT. Bật lên thì "tổng tổng hợp" biến thành "thời lượng audio" và
+    # con số mất hết ý nghĩa (đo được: 677ms -> 1966ms cho cùng một câu).
+    config.tts.realtime_pacing = False
+
     engine = PiperTts(config)
     try:
         engine.preflight()
@@ -54,11 +59,11 @@ async def _run(args) -> BenchmarkResult:
     result.checks = [
         Check("Time-to-first-audio P50", first_dist.p50, config.benchmark.tts_ms),
         Check("Time-to-first-audio P95", first_dist.p95, config.benchmark.tts_ms),
-        Check("Tổng tổng hợp P95", full_dist.p95, None, mode="record"),
+        Check("Tổng tổng hợp P95 (không pacing)", full_dist.p95, None, mode="record"),
     ]
     result.details = {
         "time-to-first-audio": first_dist.summary(),
-        "tổng tổng hợp": full_dist.summary(),
+        "tổng tổng hợp (không pacing)": full_dist.summary(),
         "PCM sinh ra": f"{total_bytes / 1024:.0f} KB",
         "ghi chú": "TTS chạy CPU — không tính vào ngân sách VRAM 6GB (§3.1)",
     }

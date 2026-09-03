@@ -15,10 +15,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import re
 import shutil
-import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -33,6 +31,20 @@ _OOM_PATTERNS = (
     re.compile(r"failed to allocate", re.I),
     re.compile(r"cudaMalloc failed", re.I),
 )
+
+
+def _absolute_binary(program: str) -> str:
+    """Đường dẫn tuyệt đối — điều kiện để CPython dùng posix_spawn thay fork.
+
+    Xem chú thích đầy đủ ở `ai/tts.py::_absolute_binary`.
+    """
+    resolved = shutil.which(program)
+    if resolved:
+        return str(Path(resolved).resolve())
+    path = Path(program)
+    if path.exists():
+        return str(path.resolve())
+    raise LlamaServerError(f"Không tìm thấy binary: {program!r}")
 
 
 class LlamaServerError(RuntimeError):
@@ -161,11 +173,15 @@ class LlamaServerManager:
 
         try:
             self._process = await asyncio.create_subprocess_exec(
-                *cmd,
+                _absolute_binary(cmd[0]), *cmd[1:],
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
-                # nhóm tiến trình riêng để hạ được cả cây con khi dừng
-                start_new_session=True,
+                # KHÔNG dùng start_new_session: nó buộc CPython đi đường
+                # fork()+exec(), mà fork() sẽ deadlock trong atfork handler của
+                # OpenMP/OpenBLAS nếu Whisper đang transcribe (xem chú thích ở
+                # ai/tts.py::_absolute_binary). llama-server không sinh tiến
+                # trình con nên không cần hạ theo nhóm — gửi tín hiệu thẳng pid.
+                close_fds=False,
             )
         except OSError as exc:
             raise LlamaServerError(f"Không spawn được llama-server: {exc}") from exc
@@ -275,13 +291,13 @@ class LlamaServerManager:
 
         logger.info("Dừng llama-server (pid=%s)", process.pid)
         with contextlib.suppress(ProcessLookupError, OSError):
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            process.terminate()
         try:
             await asyncio.wait_for(process.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             logger.warning("llama-server không phản hồi SIGTERM — SIGKILL.")
             with contextlib.suppress(ProcessLookupError, OSError):
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                process.kill()
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(process.wait(), timeout=timeout)
 

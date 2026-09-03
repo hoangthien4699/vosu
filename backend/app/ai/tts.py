@@ -55,6 +55,35 @@ class TtsUnavailable(RuntimeError):
     """Không tìm thấy binary hoặc voice model của Piper."""
 
 
+def _absolute_binary(program: str) -> str:
+    """Trả về đường dẫn TUYỆT ĐỐI của binary.
+
+    Không phải để cho đẹp: CPython chỉ dùng `posix_spawn()` thay cho
+    `fork()+exec()` khi đường dẫn có thành phần thư mục, `close_fds=False`,
+    không `start_new_session`, và không `preexec_fn`.
+
+    Vì sao phải tránh fork(): faster-whisper kéo theo OpenMP/OpenBLAS, thư
+    viện này cài `pthread_atfork` handler. Khi fork() xảy ra lúc Whisper đang
+    transcribe, handler đó gọi `pthread_join` lên các worker đang tính toán và
+    treo vĩnh viễn — cả tiến trình chết đứng, không lỗi, không timeout.
+
+    Đây KHÔNG phải tình huống hiếm: pipeline thường xuyên chạy final STT của
+    câu này trong lúc TTS của câu trước bắt đầu. Đã tái hiện được bằng B6.
+    Stack lúc treo: fork -> _pthread_atfork_prepare_handlers -> _pthread_join
+    -> __ulock_wait.
+
+    Đánh đổi của `close_fds=False`: tiến trình con kế thừa fd đang mở. Chấp
+    nhận được với một tiến trình cục bộ, ngắn hạn, do ta kiểm soát hoàn toàn.
+    """
+    resolved = shutil.which(program)
+    if resolved:
+        return str(Path(resolved).resolve())
+    path = Path(program)
+    if path.exists():
+        return str(path.resolve())
+    raise TtsUnavailable(f"Không tìm thấy binary: {program!r}")
+
+
 @dataclass
 class TtsJob:
     utterance_id: str
@@ -164,7 +193,7 @@ class PiperTts:
 
         model = self.resolve_voice(voice)
         cmd = [
-            self._config.paths.piper_bin,
+            _absolute_binary(self._config.paths.piper_bin),
             "--model", str(model),
             "--output-raw",
             "--length-scale", str(self._config.tts.length_scale),
@@ -176,6 +205,9 @@ class PiperTts:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                # BẮT BUỘC — xem _absolute_binary(): ép CPython dùng
+                # posix_spawn() thay vì fork()+exec().
+                close_fds=False,
             )
         except OSError as exc:
             self._transition(TtsState.ERROR)

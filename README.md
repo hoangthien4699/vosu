@@ -110,7 +110,14 @@ Không phải kết quả Gate — Gate phải chạy trên NVIDIA 6GB. Đây l�
 | B2 LLM tổng sinh | 962ms P50 | 500ms | ✗ |
 | B3 TTS time-to-first-audio | 560ms P50 | 400ms | ✗ piper-tts bản Python |
 | B5 E2E P95 | 3796ms | 1500ms | ✗ |
+| B6 event-loop lag P95 dưới tải | 2.6ms | 50ms | ✓ |
 | B8 Barge-in | < 0.1ms | 200ms | ✓ |
+
+B6 là kết quả đáng giá nhất ở đây: event-loop lag giữ ở 2.6ms P95 trong khi
+STT + LLM + TTS chạy đồng thời ở 74% CPU. Đó là kiểm chứng thực tế cho luận
+điểm của §2.4 — chạy inference trong worker riêng thật sự giữ được event loop
+thông thoáng, chứ không chỉ là "async trên danh nghĩa". TTS chậm đi 60% dưới
+tải, vẫn trong ngưỡng.
 
 Điều đáng chú ý ở B5: TTFT vẫn giữ ~102ms trong lúc chồng lấn, nhưng E2E lên
 tới 2.3s. Chênh lệch đó không nằm ở LLM — nó nằm ở STT (640ms mỗi câu, chạy
@@ -149,7 +156,7 @@ backend/app/
 └── api/       websocket.py
 ```
 
-### Sáu quyết định đáng biết trước khi sửa code
+### Bảy quyết định đáng biết trước khi sửa code
 
 **1. `1.5s` là ngưỡng partial, KHÔNG phải speech boundary.**
 Final STT luôn do VAD endpoint kích hoạt, áp dụng cho mọi độ dài câu. Nếu chốt
@@ -179,7 +186,16 @@ không còn gì để hủy vì tất cả đã nằm trong buffer của client.
 hủy được trong <200ms" của §2.4.1 khi đó chỉ đúng trên giấy. `B8` sẽ báo ERROR
 nếu phát hiện mình chỉ đang đo những lần hủy no-op.
 
-**6. Hệ thống là audio hai chiều đóng vòng, không phải pipeline một chiều.**
+**6. Tiến trình con phải spawn bằng `posix_spawn`, không được fork.**
+faster-whisper kéo theo OpenMP/OpenBLAS, thư viện này cài `pthread_atfork`
+handler. `fork()` trong lúc Whisper đang transcribe khiến handler gọi
+`pthread_join` lên worker đang tính và treo vĩnh viễn — cả tiến trình chết
+đứng, không lỗi, không timeout. Mà "spawn Piper trong lúc Whisper transcribe"
+chính là kịch bản thường ngày của pipeline. Vì vậy binary luôn được truyền
+bằng đường dẫn tuyệt đối, `close_fds=False`, và không `start_new_session` —
+ba điều kiện để CPython chọn `posix_spawn`.
+
+**7. Hệ thống là audio hai chiều đóng vòng, không phải pipeline một chiều.**
 Khi TTS phát qua earbud, audio output có thể trở thành input của chính hệ
 thống. Barge-in không phải tính năng thêm vào — nó là điều kiện để hệ thống
 không tự nói chuyện với chính mình.

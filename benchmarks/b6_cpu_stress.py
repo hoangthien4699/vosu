@@ -66,6 +66,11 @@ async def _run(args) -> BenchmarkResult:
     config = load_config()
     result = BenchmarkResult("B6", "CPU stress (STT + LLM + TTS đồng thời)")
 
+    # Tắt pacing: cần đo tranh chấp CPU ở TRƯỜNG HỢP XẤU NHẤT. Pacing chèn
+    # khoảng chờ giữa các chunk, tức là tự giảm tải — bật lên sẽ làm nhẹ đi
+    # đúng thứ benchmark này muốn phơi ra.
+    config.tts.realtime_pacing = False
+
     try:
         import psutil
     except ImportError:
@@ -109,15 +114,24 @@ async def _run(args) -> BenchmarkResult:
     tts_latencies: list[float] = []
     monitor = EventLoopMonitor()
 
+    def progress(message: str) -> None:
+        # Benchmark này có thể chạy rất lâu dưới tải. Im lặng hoàn toàn khiến
+        # không phân biệt được "đang chạy" với "đã treo".
+        print(f"    [B6] {message}", flush=True)
+
     async def stt_load() -> None:
-        for _name, pcm in samples:
+        for index, (_name, pcm) in enumerate(samples, 1):
+            started = time.perf_counter()
             await engine.transcribe(pcm, is_final=True)
+            progress(f"STT {index}/{len(samples)} — {(time.perf_counter()-started)*1000:.0f}ms")
 
     async def llm_load() -> None:
         if "LLM" not in components:
             return
         for i in range(runs):
+            started = time.perf_counter()
             await client.complete(build_prompt(f"Sample utterance number {i}.", "en"))
+            progress(f"LLM {i+1}/{runs} — {(time.perf_counter()-started)*1000:.0f}ms")
 
     async def tts_load() -> None:
         if not tts_available:
@@ -131,8 +145,10 @@ async def _run(args) -> BenchmarkResult:
                     first = (time.perf_counter() - started) * 1000.0
             if first is not None:
                 tts_latencies.append(first)
+            progress(f"TTS {i+1}/{runs} — {(time.perf_counter()-started)*1000:.0f}ms")
 
     # --- pha 1: chỉ TTS, lấy đường cơ sở ---
+    progress("pha 1: chỉ TTS (đường cơ sở)")
     baseline_tts: list[float] = []
     if tts_available:
         monitor.start()
@@ -143,6 +159,7 @@ async def _run(args) -> BenchmarkResult:
     idle_lag = Distribution.of(monitor.lags_ms)
 
     # --- pha 2: cả ba cùng chạy ---
+    progress("pha 2: STT + LLM + TTS đồng thời")
     if psutil is not None:
         psutil.cpu_percent(interval=None)
     monitor = EventLoopMonitor()

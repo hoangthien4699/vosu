@@ -144,3 +144,69 @@ def test_splitter_flush_tra_phan_con_lai():
     s.feed("chưa có dấu chấm")
     assert s.flush() == "chưa có dấu chấm"
     assert s.flush() == ""
+
+
+# --------------------------------------------------------------------------- #
+# Hồi quy: deadlock fork() với atfork handler của OpenMP/OpenBLAS
+# --------------------------------------------------------------------------- #
+
+async def test_piper_duoc_spawn_theo_kieu_posix_spawn(tmp_path, monkeypatch):
+    """Piper PHẢI được spawn bằng posix_spawn, không phải fork()+exec().
+
+    faster-whisper kéo theo OpenMP/OpenBLAS, thư viện này cài pthread_atfork
+    handler. fork() trong lúc Whisper đang transcribe khiến handler gọi
+    pthread_join lên worker đang tính và treo vĩnh viễn — cả tiến trình chết
+    đứng, không lỗi, không timeout. Đã tái hiện thật bằng benchmark B6:
+        fork -> _pthread_atfork_prepare_handlers -> _pthread_join -> __ulock_wait
+
+    CPython chỉ chọn posix_spawn khi đường dẫn binary có thành phần thư mục,
+    close_fds=False, không start_new_session và không preexec_fn. Test này khóa
+    hai điều kiện mà code kiểm soát được.
+    """
+    import asyncio as _asyncio
+
+    voice = tmp_path / "voice.onnx"
+    voice.write_bytes(b"stub")
+
+    cfg = load_config(env={})
+    cfg.paths.piper_voice_vi = str(voice)
+    cfg.paths.piper_bin = "python3"          # cố ý dùng tên trần, không đường dẫn
+    engine = PiperTts(cfg)
+
+    captured = {}
+    real_exec = _asyncio.create_subprocess_exec
+
+    async def spy(program, *args, **kwargs):
+        captured["program"] = program
+        captured["kwargs"] = kwargs
+        return await real_exec(
+            sys.executable, str(FIXTURES / "fake_piper.py"), **kwargs
+        )
+
+    monkeypatch.setattr(_asyncio, "create_subprocess_exec", spy)
+    monkeypatch.setenv("VOSU_FAKE_PIPER_CHUNKS", "1")
+    monkeypatch.setenv("VOSU_FAKE_PIPER_DELAY", "0.001")
+
+    async for _chunk in engine.synthesize("utt_001", "xin chào"):
+        pass
+
+    program = captured["program"]
+    assert Path(program).is_absolute(), (
+        f"binary {program!r} không phải đường dẫn tuyệt đối — CPython sẽ quay "
+        "về fork()+exec() và có nguy cơ deadlock trong atfork handler"
+    )
+    assert captured["kwargs"].get("close_fds") is False, (
+        "close_fds phải là False, nếu không CPython không dùng posix_spawn"
+    )
+    assert "start_new_session" not in captured["kwargs"], (
+        "start_new_session buộc CPython đi đường fork()"
+    )
+
+
+def test_absolute_binary_bao_loi_ro_khi_thieu():
+    from app.ai.tts import _absolute_binary
+
+    with pytest.raises(TtsUnavailable, match="Không tìm thấy binary"):
+        _absolute_binary("chac-chan-khong-ton-tai-binary-nay")
+
+    assert Path(_absolute_binary(sys.executable)).is_absolute()
