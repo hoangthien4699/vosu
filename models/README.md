@@ -25,26 +25,20 @@ hiểu intent"*, không phải *"transcription chính xác tuyệt đối"* — 
 tối ưu khác nhau. Chỉ nâng lên Medium nếu benchmark cho thấy Small thực sự
 không đủ.
 
-## Vì sao Gemma 3 4B thay cho Qwen2.5-3B
+## Vì sao Qwen3.5-2B Q8_0
 
-Đặc tả v4.1.0 chọn Qwen2.5-3B. Khi chạy thật, Qwen rò tiếng Trung vào bản dịch
-tiếng Việt — quan sát trực tiếp:
+Đã thử ba model trên chính prompt của dự án. Qwen2.5-3B (đặc tả gốc) loại vì rò
+tiếng Trung vào bản dịch tiếng Việt. Giữa Qwen3.5-2B và Gemma 3 4B, chất lượng
+dịch ngang nhau sau khi sửa prompt — chọn Qwen3.5-2B vì bộ nhớ:
 
-    "Tôi nghĩ chúng ta nên推迟这次讨论目前。"
+| | RSS | Ước tính tổng VRAM | Dự phòng dưới trần 5.5GB |
+|---|---|---|---|
+| Qwen3.5-2B Q8_0 | 2119 MB | 5.17 GB | **0.33 GB** |
+| Gemma 3 4B Q4_K_M | 2617 MB | 5.50 GB | **0** |
 
-Model 3B lượng tử hóa 4-bit không giữ vững ngôn ngữ đích. Gemma 3 hỗ trợ đa
-ngôn ngữ tốt hơn đáng kể.
+**Q8_0 chứ không phải Q4.** Model 2B nhỏ nên lượng tử hóa 4-bit làm hụt chất
+lượng dịch rõ hơn nhiều so với model lớn. Q8_0 gần như không mất gì, mà file
+vẫn nhẹ hơn một model 4B nén Q4.
 
-Đánh đổi cần theo dõi:
-
-| | Qwen2.5-3B | Gemma 3 4B |
-|---|---|---|
-| File Q4_K_M | 2.0 GB | 2.3 GB |
-| Prompt template | ChatML | `<start_of_turn>`, KHÔNG có vai trò system |
-| Stop token | `<\|im_end\|>` | `<end_of_turn>` |
-
-**+0.36GB nghe thì nhỏ, nhưng ngân sách VRAM ở §3.1 tính cho Qwen và đã sát
-mép 5.5GB.** Bắt buộc chạy lại B4 trên phần cứng NVIDIA trước khi coi Gemma là
-lựa chọn chốt. Nếu vượt trần: hạ Whisper xuống `base`, giảm `n_ctx`, hoặc quay
-lại Qwen — đổi model chỉ là một dòng trong `config.yaml`, cả hai template đều
-đã có sẵn.
+Đổi model là một dòng trong `config.yaml` — prompt template tự nhận diện theo
+tên file. So sánh lại bằng `python -m benchmarks.compare_models`.
