@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.ai.copilot import SemanticEventParser, TranslationDelta
 
 VI = "Tôi nghĩ chúng ta nên tạm gác lại cuộc thảo luận này."
@@ -85,19 +87,49 @@ def test_cat_rac_cau_truc_o_cuoi_gia_tri():
     dịch rồi mới đóng chuỗi."""
     from app.ai.copilot import clean_value
 
-    assert clean_value("Tạm dừng lại đây.},{") == "Tạm dừng lại đây."
-    assert clean_value("Xong.}]") == "Xong."
+    assert clean_value("Tôi nghĩ nên hoãn.},{") == "Tôi nghĩ nên hoãn."
+    assert clean_value("Hết hạn rồi.”}”}”}”}”}”}") == "Hết hạn rồi."
+    assert clean_value("Hai tuần.”}hơn") == "Hai tuần."
 
 
-def test_khong_cat_nham_dau_cau_binh_thuong():
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Dấu ngoặc KHỚP đúng thứ tự là chữ thật, không phải rác.
+        "Bấm phím [ENTER] để tiếp tục.",
+        "Bấm phím có nhãn [ENTER]",
+        "Giá trị là {x}",
+        'Anh ấy nói “được” rồi.',
+        # Lặp từ là cách người ta nói, không phải model kẹt vòng lặp.
+        "Hihihihihihi",
+        "Dạ dạ dạ dạ dạ dạ",
+        "Không không không không không",
+        "Nó cứ lằng nhằng lằng nhằng.",
+        # Câu thường
+        "Chúng ta còn bao nhiêu thời gian?",
+        "Ừ thì… cũng được…",
+        "Một, hai, ba, bốn, năm",
+    ],
+)
+def test_khong_dung_toi_chu_that(text):
+    """clean_value ĐỔI NGHĨA nếu cắt nhầm, nên phải hẹp.
+
+    Bản đầu chỉ nhìn ký tự ở đuôi và cắt hỏng bốn ca thật:
+        "Bấm phím có nhãn [ENTER]" -> "...[ENTER"
+        "Hihihihihihi"             -> "Hi"
+        "Dạ dạ dạ dạ dạ dạ"        -> "Dạ"
+        "Giá trị là {x}"           -> "Giá trị là {x"
+
+    Dấu hiệu đúng của rác là dấu ĐÓNG KHÔNG CÓ dấu mở khớp, và mẩu lặp phải
+    CHỨA ký tự cấu trúc.
+    """
     from app.ai.copilot import clean_value
 
-    for text in ("Bình thường không có rác.", 'Anh ấy nói "được" rồi.',
-                 "Câu hỏi phải không?", "Kết thúc bằng dấu phẩy,", "Ba chấm…"):
-        assert clean_value(text) == text, text
+    assert clean_value(text) == text
 
 
 def test_cat_het_thi_giu_nguyen():
+    """Không bao giờ trả về rỗng — thà để lại rác còn hơn nuốt mất nội dung."""
     from app.ai.copilot import clean_value
 
     assert clean_value("}{") == "}{"
@@ -124,9 +156,3 @@ def test_cat_vong_lap_o_cuoi():
     assert clean_value(looped) == "About two weeks, then it’s the contract expiration."
 
 
-def test_khong_cat_nham_lap_co_nghia():
-    from app.ai.copilot import clean_value
-
-    for text in ("haha haha haha haha haha", "Được rồi được rồi được rồi.",
-                 "Cô ấy nói “vâng” rồi."):
-        assert clean_value(text) == text, text

@@ -29,38 +29,71 @@ logger = logging.getLogger(__name__)
 
 #: Rác cấu trúc JSON lọt vào CUỐI một giá trị chuỗi.
 #
-# Sinh có grammar đảm bảo cấu trúc đúng, nhưng `{`, `}`, `[`, `]` là ký tự hợp
-# lệ BÊN TRONG chuỗi JSON nên grammar không cấm được. Quan sát thật với
-# Gemma 3 4B: model muốn đóng object và mở object mới, nhưng token nó chọn đặt
-# `},{` vào trong chuỗi trước rồi mới đóng:
+# Sinh có grammar đảm bảo cấu trúc đúng, nhưng `{`, `}`, `[`, `]` và dấu ngoặc
+# kép cong là ký tự HỢP LỆ bên trong chuỗi JSON nên grammar không cấm được.
+# Quan sát thật với Gemma 3 4B và Qwen3.5: model muốn đóng object rồi mở object
+# mới, nhưng token nó chọn đặt `},{` vào TRONG chuỗi trước rồi mới đóng:
 #
-#     "meaning":"Được rồi, chúng ta tạm dừng lại đây.},{"
+#     "translation":"Được rồi, chúng ta tạm dừng lại đây.},{"
 #
 # JSON vẫn hợp lệ, chỉ là người dùng đọc thấy rác. Đã thử cấm bằng `pattern`
 # trong JSON Schema — llama.cpp bỏ qua.
-#: Dấu ngoặc kép cong cũng phải tính: model sinh `”}”}”}...` chứ không phải
-#: `"}"}`. Bộ ký tự chỉ có dấu thẳng sẽ trượt hoàn toàn.
-_QUOTES = '"\u201c\u201d\u2018\u2019'
-_TRAILING_JSON_NOISE = re.compile(
-    r'[\s]*[}\]][\s,{\[\]' + _QUOTES + r']*$'
+
+#: Đuôi lặp — nhưng CHỈ khi mẩu lặp có chứa ký tự cấu trúc.
+#
+# Không có ràng buộc đó thì nó cắt cả chữ thật: "Hihihihihihi" -> "Hi",
+# "Dạ dạ dạ dạ dạ dạ" -> "Dạ". Rác thì lặp `”}”}”}`, còn người thì lặp từ.
+_LOOPED_TAIL = re.compile(
+    r'((?=[^{}\[\]“”]*[{}\[\]“”]).{1,6}?)\1{3,}[\s]*$'
 )
 
 
-#: Chuỗi kẹt vòng lặp: cùng một cụm ngắn lặp lại nhiều lần liên tiếp ở cuối.
-_LOOPED_TAIL = re.compile(r'(.{1,6}?)\1{4,}\s*$')
+def _first_unmatched_closer(text: str) -> int | None:
+    """Vị trí dấu đóng ĐẦU TIÊN không có dấu mở khớp với nó.
+
+    Đây là thứ phân biệt rác với chữ thật, và là lý do không thể chỉ đếm số
+    lượng: `.},{` có đúng một `{` và một `}` nên ĐẾM ra cân bằng, nhưng dấu
+    đóng lại đứng TRƯỚC dấu mở. Còn `[ENTER]` hay `{x}` thì khớp đúng thứ tự
+    và phải giữ nguyên.
+    """
+    stack: list[str] = []
+    pairs = {"}": "{", "]": "["}
+    for index, char in enumerate(text):
+        if char in "{[":
+            stack.append(char)
+        elif char in pairs:
+            if stack and stack[-1] == pairs[char]:
+                stack.pop()
+            else:
+                return index
+    return None
 
 
 def clean_value(text: str) -> str:
     """Cắt rác cấu trúc ở cuối một giá trị chuỗi do model sinh ra.
 
-    Cố ý hẹp: chỉ cắt khi phần đuôi CÓ dấu đóng `}` hoặc `]`. Một câu tiếng
-    Việt không bao giờ kết thúc bằng những ký tự đó, còn dấu ngoặc kép hay dấu
-    phẩy đứng một mình thì để nguyên.
+    Cố ý HẸP — chỉ động vào chuỗi khi có bằng chứng cấu trúc hỏng:
+
+      * một dấu đóng không có dấu mở khớp (`.},{`), hoặc
+      * một mẩu CÓ CHỨA ký tự cấu trúc lặp lại ở đuôi (`”}”}”}`).
+
+    Chữ thật không bị đụng tới: `Bấm phím [ENTER]`, `Giá trị là {x}`,
+    `Hihihihihihi`, `Dạ dạ dạ dạ dạ dạ` đều giữ nguyên.
+
+    Không bao giờ trả về chuỗi rỗng — thà để lại rác còn hơn nuốt mất nội dung.
     """
-    # Cắt vòng lặp trước, rồi mới cắt rác cấu trúc — vòng lặp thường KẾT THÚC
-    # bằng rác cấu trúc nên làm ngược thứ tự sẽ chỉ gỡ được một mắt xích.
     cleaned = _LOOPED_TAIL.sub("", text)
-    cleaned = _TRAILING_JSON_NOISE.sub("", cleaned)
+
+    cut = _first_unmatched_closer(cleaned)
+    if cut is not None:
+        cleaned = cleaned[:cut]
+
+    # Dọn nốt dấu câu/ngoặc thừa sát mép, và chỉ khi số dấu nháy cong lẻ —
+    # `Anh ấy nói “được”` phải giữ nguyên cả cặp.
+    if cleaned.count("“") != cleaned.count("”"):
+        cleaned = cleaned.rstrip("“”")
+    cleaned = cleaned.rstrip(" \t\n,")
+
     return cleaned if cleaned.strip() else text
 
 
