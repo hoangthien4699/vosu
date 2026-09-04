@@ -257,6 +257,15 @@ function onEvent(event) {
       log(type, `${data.trigger} · ${data.duration_s}s`);
       break;
 
+    case "utterance_continued":
+      // Server nghe ra câu còn dở, đang chờ nói tiếp. PHẢI phát tiếp: file
+      // đang dừng ở utterance_endpoint, không phát thì audio cần để quyết
+      // định sẽ không bao giờ tới và nó dừng vĩnh viễn.
+      ui.fileState.textContent = "câu chưa hết — phát tiếp";
+      log(type, `chưa trọn câu: ${JSON.stringify(data.text)}`);
+      resumePlayback();
+      break;
+
     case "stt_final": {
       // Xấp xỉ VAD endpoint phía client: thời điểm sớm nhất client biết câu
       // đã dứt. Con số E2E chính xác do server đo (§7); đây là để quan sát.

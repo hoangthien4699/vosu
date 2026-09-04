@@ -26,8 +26,10 @@ import logging
 import uuid
 from dataclasses import dataclass
 
+import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..ai.completeness import looks_complete
 from ..ai.copilot import SemanticEventParser, TranslationDelta, clean_value
 from ..ai.direction import Direction
 from ..ai.direction import resolve as resolve_direction
@@ -44,6 +46,35 @@ from ..protocol.schemas import ClientControl, SchemaValidationError, validate_ev
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@dataclass(eq=False)
+class _HeldSegment:
+    """Câu nghe ra còn dở, đang chờ xem người ta có nói tiếp không."""
+
+    segment: AudioSegment
+    transcript: object
+    utterance_id: str
+    merges: int
+
+
+def _join_segments(first: AudioSegment, second: AudioSegment) -> AudioSegment:
+    """Nối hai đoạn thành một câu liền.
+
+    Chèn lại đúng khoảng lặng giữa hai đoạn thay vì dán sát: dán sát thì
+    Whisper nghe ra một từ ghép không có thật ở chỗ nối.
+    """
+    gap_s = max(0.0, second.start_s - (first.start_s + first.duration_s))
+    gap = np.zeros(int(gap_s * first.sample_rate), dtype=first.pcm.dtype)
+    pcm = np.concatenate([first.pcm, gap, second.pcm])
+    return AudioSegment(
+        kind=second.kind,
+        pcm=pcm,
+        sample_rate=first.sample_rate,
+        start_s=first.start_s,
+        duration_s=pcm.size / first.sample_rate,
+        trigger=f"{first.trigger}+merge",
+    )
 
 
 @dataclass(eq=False)  # AudioSegment chứa numpy — so sánh mặc định sẽ nổ
@@ -170,6 +201,9 @@ class CopilotSession:
         # tụt xuống tổng của hai chặng thay vì chặng chậm nhất. Đo thật khi còn
         # nối tiếp, file 6 câu: độ trễ dồn 3.6s -> 6.5s, mỗi câu tụt thêm ~570ms
         # và không có điểm dừng.
+        #: Câu nghe ra còn dở, đang giữ lại chờ ghép với đoạn nói tiếp.
+        self._held: _HeldSegment | None = None
+        self._hold_timer: asyncio.Task | None = None
         self._llm_queue: asyncio.Queue[_LlmItem | None] = asyncio.Queue()
         self._llm_worker: asyncio.Task | None = None
         self._llm_task: asyncio.Task | None = None
@@ -463,6 +497,23 @@ class CopilotSession:
 
         # --- final STT (bắt buộc, do VAD endpoint kích hoạt) ---
         self.state.transition(utterance_id, UtteranceState.TRANSCRIBING)
+
+        # Mảnh câu đang giữ (lần trước nghe ra một câu dở) -> ghép audio rồi
+        # nghe lại trên đoạn đã liền. Nghe lại chứ không nối hai transcript:
+        # Whisper trên audio liền mạch cho ra câu đúng ngữ pháp hơn hẳn.
+        held = self._held
+        merges = 0
+        if held is not None:
+            self._cancel_hold_timer()
+            self._held = None
+            segment = _join_segments(held.segment, segment)
+            merges = held.merges + 1
+            self._retire(held.utterance_id)
+            logger.info(
+                "%s: ghép %s vào %s (lần %d) — câu trước còn dở",
+                self.session_id, held.utterance_id, utterance_id, merges,
+            )
+
         async with self.runtime.job("stt_final"):
             transcript = await self.runtime.stt.transcribe(segment.pcm, is_final=True)
 
@@ -471,6 +522,82 @@ class CopilotSession:
             self.state.transition(utterance_id, UtteranceState.DONE)
             return
 
+        if self._should_hold(transcript.text, segment, merges):
+            await self._hold_for_more(segment, transcript, utterance_id, merges)
+            return
+
+        await self._after_transcript(segment, transcript, utterance_id, utterance)
+
+    # -- gộp câu bị ngắt giữa chừng --------------------------------------- #
+
+    def _should_hold(self, text: str, segment: AudioSegment, merges: int) -> bool:
+        cfg = self.config.stt
+        if not cfg.merge_incomplete or merges >= cfg.max_merges:
+            return False
+        if segment.duration_s >= cfg.max_merged_s:
+            return False
+        return not looks_complete(text)
+
+    async def _hold_for_more(
+        self, segment: AudioSegment, transcript, utterance_id: str, merges: int
+    ) -> None:
+        """Giữ câu dở lại, chờ xem người ta có nói tiếp không.
+
+        Phải BÁO RA client: ở chế độ phát file, client đã dừng file ngay khi
+        nghe `utterance_endpoint`. Không báo thì nó dừng vĩnh viễn — audio cần
+        để quyết định sẽ không bao giờ tới.
+        """
+        self._held = _HeldSegment(segment, transcript, utterance_id, merges)
+        logger.info(
+            "%s: %s nghe ra câu dở (%r) — chờ nói tiếp",
+            self.session_id, utterance_id, transcript.text[:48],
+        )
+        await self.bus.emit(
+            EventType.UTTERANCE_CONTINUED,
+            utterance_id=utterance_id,
+            data={
+                "text": transcript.text,
+                "reason": "incomplete",
+                "wait_ms": self.config.stt.merge_window_ms,
+            },
+        )
+        self._hold_timer = asyncio.create_task(
+            self._flush_hold_after(utterance_id), name=f"hold-{utterance_id}"
+        )
+
+    def _cancel_hold_timer(self) -> None:
+        if self._hold_timer is not None and not self._hold_timer.done():
+            self._hold_timer.cancel()
+        self._hold_timer = None
+
+    def _retire(self, utterance_id: str) -> None:
+        """Đóng utterance của mảnh câu đã được ghép vào câu sau."""
+        with contextlib.suppress(Exception):
+            self.state.transition(utterance_id, UtteranceState.DONE)
+
+    async def _flush_hold_after(self, utterance_id: str) -> None:
+        """Hết giờ chờ mà không ai nói tiếp -> câu dở vẫn phải được dịch.
+
+        Người ta có quyền bỏ lửng câu. Giữ mãi thì mất hẳn câu đó.
+        """
+        try:
+            await asyncio.sleep(self.config.stt.merge_window_ms / 1000)
+        except asyncio.CancelledError:
+            return
+        held = self._held
+        if held is None or held.utterance_id != utterance_id:
+            return
+        self._held = None
+        self._hold_timer = None
+        utterance = self.state.get(utterance_id)
+        if utterance is None or utterance.is_terminal:
+            return
+        logger.info("%s: %s hết giờ chờ — dịch nguyên câu dở", self.session_id, utterance_id)
+        await self._after_transcript(held.segment, held.transcript, utterance_id, utterance)
+
+    async def _after_transcript(
+        self, segment: AudioSegment, transcript, utterance_id: str, utterance
+    ) -> None:
         utterance.final_text = transcript.text
         utterance.language = transcript.language
 

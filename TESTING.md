@@ -65,6 +65,40 @@ File được phát qua **đúng đường mà micro đi** — cùng resample v�
 chunk 100ms, cùng WebSocket — nên nó kiểm chứng pipeline thật, không phải
 đường tắt.
 
+#### Cắt câu: dựa vào nội dung, không chỉ độ dài khoảng lặng
+
+Chỉ đo khoảng lặng thì **không** tách được "ngập ngừng giữa câu" với "đã nói
+xong". Đo thật: khoảng ngập ngừng giữa câu của người nói chậm (800ms) còn dài
+hơn khoảng nghỉ giữa hai câu của người nói bình thường (700ms).
+
+Nên sau khi STT xong, hệ thống xét luôn transcript có trông như một câu trọn
+nghĩa không (`backend/app/ai/completeness.py`). Ba tín hiệu, lấy miễn phí:
+
+| tín hiệu | ví dụ | bắt được |
+|---|---|---|
+| không có dấu kết câu | `"So what I am trying to say is"` | 25% |
+| dấu ba chấm — bỏ lửng | `"Tôi nghĩ là chúng ta nên..."` | +33% |
+| từ cuối không đứng cuối câu được | `"Before we sign anything I want to."` | +34% |
+
+Riêng dấu câu là không đủ: Whisper vẫn chấm câu cho mảnh dở. Kết hợp cả ba,
+đo trên bộ thử ngập ngừng thật:
+
+```
+bắt được câu dở          11/12  (92%)
+không giữ nhầm câu trọn  32/32  (100%)
+```
+
+Nghe ra câu dở thì giữ lại, chờ tối đa `stt.merge_window_ms` (1200ms). Có nói
+tiếp thì **ghép audio rồi nghe lại trên đoạn liền** — nghe lại chứ không nối
+hai transcript, vì Whisper trên audio liền mạch cho ra câu đúng ngữ pháp hơn.
+Không ai nói tiếp thì vẫn dịch nguyên câu dở: người ta có quyền bỏ lửng câu.
+
+Đo A/B trên file 6 câu trọn: bật hay tắt đều ~6.0s, chênh lệch nằm trong nhiễu
+— tính năng không cộng gì vào câu bình thường.
+
+Thử bằng `benchmarks/audio/ngat_giua_cau.wav` (dựng bằng script trong
+`benchmarks/`): hai câu, mỗi câu bị ngắt 0.9s giữa chừng.
+
 #### Chế độ "dừng từng câu để đọc bản dịch" (bật mặc định)
 
 File **phát ra loa** đúng nhịp thời gian thực, đồng bộ với dòng byte gửi lên
@@ -78,6 +112,12 @@ câu đó, xong mới phát tiếp:
 ```
 
 Không phát lại âm thanh gốc: bạn vừa nghe câu đó lúc file chạy tới rồi.
+
+**Câu bị ngắt giữa chừng thì file phát tiếp, không dừng.** Nếu server nghe ra
+một câu còn dở ("So what I am trying to say is…") thì nó phát
+`utterance_continued`, client phát tiếp cho tới chỗ dứt thật, rồi hai đoạn được
+ghép lại và dịch một lần. Không có cái này thì file dừng vĩnh viễn — audio cần
+để quyết định sẽ không bao giờ tới.
 
 **Mốc dừng lấy từ `utterance_endpoint`, không phải `stt_final`.** Server phát
 `utterance_endpoint` ngay khi VAD chốt câu, trước cả khi Whisper chạy. Đợi

@@ -53,6 +53,30 @@ stt:
   beam_size: 1
   language: null                 # null = tự nhận diện (LID)
   vad_filter: false              # VAD đã làm ở tầng audio/, đừng làm hai lần
+  # --- gộp câu bị ngắt giữa chừng ---
+  #
+  # Chỉ đo độ dài khoảng lặng thì KHÔNG tách được "ngập ngừng giữa câu" với
+  # "đã nói xong". Đo thật: khoảng ngập ngừng giữa câu của người nói chậm
+  # (800ms) còn DÀI HƠN khoảng nghỉ giữa hai câu của người nói bình thường
+  # (700ms) — không có ngưỡng thời gian nào đúng cho cả hai.
+  #
+  # Nên xét thêm NỘI DUNG transcript (backend/app/ai/completeness.py): nghe ra
+  # câu còn dở thì giữ lại, chờ xem có nói tiếp không rồi ghép audio và nghe
+  # lại. Đo trên bộ thử ngập ngừng thật:
+  #
+  #     bắt được câu dở          11/12 (92%)
+  #     không giữ nhầm câu trọn  32/32 (100%)
+  #
+  # Hai phía không tốn ngang nhau, và ngưỡng cố ý nghiêng theo: bỏ sót câu dở
+  # thì người dùng nhận bản dịch của MỘT MẢNH câu; giữ nhầm câu trọn thì chỉ
+  # chậm thêm một nhịp rồi vẫn ra đúng.
+  merge_incomplete: true
+  # Chờ ngần này rồi không ai nói tiếp thì dịch nguyên câu dở — người ta có
+  # quyền bỏ lửng câu, giữ mãi là mất hẳn câu đó.
+  merge_window_ms: 1200
+  # Chặn heuristic đọc sai liên tục làm câu dài vô hạn.
+  max_merges: 2
+  max_merged_s: 20.0
 
 llm:
   host: 127.0.0.1

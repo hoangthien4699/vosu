@@ -41,13 +41,17 @@ class FakeStt:
         self.text = text or "I think we should table this for now."
         #: Giả lập STT chậm — cần để dựng lại cảnh hàng đợi bị dồn.
         self.delay_s = delay_s
+        #: Trả lần lượt từng chuỗi, hết thì quay về `text`. Dùng để dựng cảnh
+        #: nghe ra câu dở rồi mới nghe ra câu trọn sau khi ghép.
+        self.script: list[str] = []
 
     async def transcribe(self, pcm, *, is_final=True):
         if self.delay_s:
             await asyncio.sleep(self.delay_s)
+        text = self.script.pop(0) if self.script else self.text
         self.calls.append(("final" if is_final else "partial", pcm.size))
         return Transcript(
-            text=self.text,
+            text=text,
             language=self.language,
             language_probability=0.98,
             is_final=is_final,
@@ -973,3 +977,54 @@ def test_bao_moc_het_cau_truoc_khi_stt_chay(client):
     endpoint = next(e for e in events if e["type"] == "utterance_endpoint")
     assert endpoint["data"]["trigger"] == "vad_endpoint"
     assert endpoint["data"]["duration_s"] > 0
+
+
+def test_cau_bi_ngat_giua_chung_duoc_ghep_lai_thanh_mot(client):
+    """Nghe ra câu dở -> giữ lại, ghép với đoạn nói tiếp, dịch MỘT lần.
+
+    Chỉ đo độ dài khoảng lặng thì không tách được "ngập ngừng giữa câu" với
+    "đã nói xong": đo thật, khoảng ngập ngừng giữa câu của người nói chậm
+    (800ms) còn DÀI HƠN khoảng nghỉ giữa hai câu của người bình thường (700ms).
+    Không có ngưỡng thời gian nào đúng cho cả hai, nên phải xét nội dung.
+    """
+    stt = client.app.state.runtime.stt
+    stt.script = [
+        "So what I am trying to say is",                        # nghe lần 1: dở
+        "So what I am trying to say is we need more time.",     # nghe lại sau khi ghép
+    ]
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        payload = utterance_stream()
+        for _ in range(2):
+            for i in range(0, len(payload), 3200):
+                ws.send_bytes(payload[i : i + 3200])
+        events = drain(ws, "copilot_done", limit=800)
+
+    continued = [e for e in events if e["type"] == "utterance_continued"]
+    finals = [e for e in events if e["type"] == "stt_final"]
+    assert continued, "câu dở phải được báo ra để client phát tiếp"
+    assert continued[0]["data"]["reason"] == "incomplete"
+    assert len(finals) == 1, f"phải ra MỘT câu ghép, không phải hai mảnh: {finals}"
+    assert finals[0]["data"]["text"] == "So what I am trying to say is we need more time."
+
+
+def test_cau_do_ma_khong_ai_noi_tiep_thi_van_phai_ra_ban_dich(client):
+    """Người ta có quyền bỏ lửng câu. Giữ mãi là mất hẳn câu đó."""
+    client.app.state.config.stt.merge_window_ms = 120
+    client.app.state.runtime.stt.text = "So what I am trying to say is"
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        events = send_utterance(ws)
+
+    assert any(e["type"] == "utterance_continued" for e in events)
+    finals = [e for e in events if e["type"] == "stt_final"]
+    assert finals, "hết giờ chờ mà vẫn không dịch thì câu đó mất hẳn"
+    assert finals[0]["data"]["text"] == "So what I am trying to say is"
+
+
+def test_cau_tron_thi_khong_bi_giu_lai(client):
+    """Không được cộng thêm một nhịp chờ vào mọi câu bình thường."""
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        events = send_utterance(ws)
+    assert not [e for e in events if e["type"] == "utterance_continued"]
