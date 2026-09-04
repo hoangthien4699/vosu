@@ -6,7 +6,10 @@ mà trình duyệt không báo lỗi gì rõ ràng — chỉ vài dòng 404 lẫ
 from __future__ import annotations
 
 import contextlib
+import json
 import re
+import shutil
+import subprocess
 
 import pytest
 from fastapi.testclient import TestClient
@@ -111,3 +114,29 @@ def test_tua_nhanh_qua_im_lang_khi_phat_file():
     reset_at = js.index("if (skipping)")
     after = js[reset_at : js.index("scheduleFileChunk", reset_at)]
     assert "f.head = ctx.currentTime" in after
+
+
+def test_app_js_chay_that_khong_no_o_bat_ky_event_nao():
+    """CHẠY app.js thật, không phải đọc nó như văn bản.
+
+    Các test khác chỉ kiểm app.js có chứa chuỗi nào — chúng không bắt được lỗi
+    chỉ lộ lúc chạy. Đã trả giá đúng một lần: `noteBusy(type)` đọc biến `uttId`
+    không tồn tại, nên mỗi lượt `tts_done` ném ReferenceError NGAY TRƯỚC dòng
+    resolve(). Chờ đọc xong không bao giờ được giải phóng, file chỉ phát tiếp
+    nhờ cầu chì 30 giây trong speakAndWait. Đo trên client thật: im lặng 27.6
+    giây sau mỗi bản dịch, đúng thứ người dùng báo.
+
+    Không bộ đo Python nào bắt được, vì tất cả đều CHÉP LẠI luật của client
+    thay vì chạy chính nó.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("cần Node để chạy client thật")
+
+    result = subprocess.run(
+        [node, str(REPO_ROOT / "tests" / "client_smoke.mjs"), str(CLIENT_DIR)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    problems = json.loads(result.stdout.strip().splitlines()[-1])["problems"]
+    assert not problems, "\n".join(problems)

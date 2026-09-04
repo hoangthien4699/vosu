@@ -238,7 +238,7 @@ function stopFileAudio() {
 
 function onEvent(event) {
   const { type, data, utterance_id: uttId } = event;
-  noteBusy(type);
+  noteBusy(type, uttId);
 
   switch (type) {
     case "session_started":
@@ -524,8 +524,15 @@ function resumePlayback() {
 /* Đánh thức chuỗi nghe lại khi một lượt TTS kết thúc, dù vì lý do gì.
  *
  * Không đợi riêng `tts_done`: nếu TTS lỗi hoặc bị hủy mà ta vẫn đợi thì chuỗi
- * nghe lại treo và file không bao giờ phát tiếp.                             */
-function noteBusy(type) {
+ * nghe lại treo và file không bao giờ phát tiếp.
+ *
+ * `uttId` PHẢI được truyền vào. Trước đây hàm này chỉ nhận `type` nhưng thân
+ * hàm lại đọc `uttId` — mỗi lượt `tts_done` ném ReferenceError NGAY TRƯỚC
+ * dòng resolve(), nên chờ không bao giờ được giải phóng và file chỉ phát tiếp
+ * nhờ cầu chì 30 giây trong speakAndWait. Đúng "khoảng im lặng rất lâu" người
+ * dùng gặp. Không bộ đo Python nào bắt được vì chúng chép lại luật của client
+ * thay vì chạy chính app.js.                                                 */
+function noteBusy(type, uttId) {
   if (state.ttsWaiter && (type === "tts_done" || type === "tts_cancelled" || type === "tts_error")) {
     // Bỏ qua lượt đọc của câu khác — nó không nói gì về câu ta đang chờ.
     if (state.ttsWaitFor && uttId && uttId !== state.ttsWaitFor) return;
