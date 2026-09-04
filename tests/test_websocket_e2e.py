@@ -278,6 +278,9 @@ def tts_client(monkeypatch, tmp_path):
 
     cfg = load_config(env={})
     cfg.tts.enabled = True
+    # Bộ test KHÔNG được phụ thuộc engine tùy chọn: `vieneu` cần venv riêng
+    # và ~9s nạp model. Nói rõ ra thay vì thừa hưởng config.yaml.
+    cfg.tts.engine = "piper"
     cfg.tts.stream_by_sentence = True
     cfg.tts.min_sentence_chars = 8
     cfg.paths.piper_bin = sys.executable
