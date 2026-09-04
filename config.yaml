@@ -44,10 +44,18 @@ vad:
   #
   #   ngưỡng   cắt nhầm   gộp nhầm
   #     400        4          0
-  #     900        1          1     <- đang dùng
+  #     900        1          1
   #    1000        0          2
+  #
+  # Nhưng gộp nhầm hoá ra tệ hơn bảng trên gợi ý: file 13.8s có ba câu thoại
+  # ra ĐÚNG MỘT utterance, bản dịch chỉ hiện ở giây thứ 11 — người dùng thấy
+  # như phần mềm đọc hết đoạn rồi mới xử lý, thay vì dịch từng câu.
+  #
+  # Nên 900ms giờ chỉ là ngưỡng cho câu NGẮN.
   min_silence_ms: 900
-  # Ngưỡng ngắn khi câu đã dài hơn long_utterance_s (tránh gộp nhiều câu)
+  # Câu đã nói quá long_utterance_s thì chỉ chờ ngần này. Người ta ngập ngừng
+  # ở ĐẦU câu khi đang tìm chữ; nghỉ SAU khi đã nói trọn một ý gần như luôn là
+  # hết câu. Quét 400-650ms đều cho kết quả tốt nhất, lấy 550 giữa plateau.
   min_silence_after_ms: 550
   long_utterance_s: 2.5
   min_speech_ms: 200
