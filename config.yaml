@@ -33,7 +33,17 @@ paths:
 vad:
   backend: silero
   threshold: 0.5
-  min_silence_ms: 400
+  # Ngưỡng im lặng để chốt câu — CỘNG THẲNG vào E2E.
+  #
+  # Đo thật: ở 400ms, ngừng giữa câu 500ms là bị cắt đôi và người nói chậm bị
+  # cắt làm ba. Ở 900ms chỉ còn gộp nhầm khi hai câu cách nhau 400ms (ngắn bất
+  # thường). Cắt nhầm giữa câu tệ hơn gộp: nó cho ra bản dịch của một mảnh câu.
+  #
+  #   ngưỡng   cắt nhầm   gộp nhầm
+  #     400        4          0
+  #     900        1          1     <- đang dùng
+  #    1000        0          2
+  min_silence_ms: 900
   min_speech_ms: 200
 
 chunker:
@@ -53,8 +63,11 @@ llm:
   host: 127.0.0.1
   port: 8080
   n_ctx: 2048
-  n_predict: 96
-  temperature: 0.2
+  # Bản dịch KĨ dài hơn bản dịch lược, và câu nhiều mệnh đề cần chỗ.
+  n_predict: 160
+  # Dịch cần bám sát, không cần sáng tạo. Càng thấp càng ít bịa từ và ít thay
+  # danh từ bằng "từ nghe hay hơn".
+  temperature: 0.1
   n_gpu_layers: null         # null -> DeviceProfile macos = 99 (Metal)
   prompt_template: auto      # auto suy từ tên file GGUF
   # BẮT BUỘC với Gemma 3 (sliding-window attention). Đo trên M4: thiếu cờ này

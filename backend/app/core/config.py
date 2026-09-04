@@ -59,8 +59,28 @@ class AudioConfig:
 class VadConfig:
     backend: str = "silero"  # silero | energy (energy = fallback không cần model)
     threshold: float = 0.5
-    # §7 — ngưỡng im lặng để chốt câu. 300–500ms; cộng thẳng vào E2E.
-    min_silence_ms: int = 400
+    # Ngưỡng im lặng để chốt câu. CỘNG THẲNG vào E2E (§7).
+    #
+    # §7 đề xuất 300-500ms, nhưng đó là cho mô hình "gợi ý phản xạ" của bản
+    # gốc. Sản phẩm giờ là phiên dịch: cắt nhầm giữa câu cho ra bản dịch của
+    # một MẢNH câu — sai hẳn nghĩa; còn gộp hai câu thì nội dung vẫn đúng, chỉ
+    # là khối dài hơn. Hai lỗi không ngang nhau, nên nghiêng về phía gộp.
+    #
+    # Đo thật (Silero VAD, giọng `say` tốc độ 110-145 wpm):
+    #
+    #   ngưỡng   cắt nhầm giữa câu   gộp nhầm hai câu
+    #     400ms         4                  0          <- mặc định cũ
+    #     600ms         3                  0
+    #     800ms         2                  1
+    #     900ms         1                  1          <- đang dùng
+    #    1000ms         0                  2
+    #
+    # Ở 400ms, chỉ cần ngừng giữa câu 500ms là bị cắt đôi, và người nói chậm
+    # có ngập ngừng bị cắt làm ba. Ở 900ms chỉ còn gộp nhầm khi hai câu cách
+    # nhau 400ms — khoảng đó ngắn bất thường trong hội thoại thật.
+    #
+    # Đánh đổi: +500ms vào E2E mỗi câu so với mặc định cũ.
+    min_silence_ms: int = 900
     min_speech_ms: int = 200
     speech_pad_ms: int = 100
     # Ngưỡng để coi speech probability là "đang suy giảm" (dấu hiệu sắp dứt câu).
@@ -98,13 +118,21 @@ class LlmConfig:
     host: str = "127.0.0.1"
     port: int = 8080
     n_ctx: int = 2048
-    # Output giờ chỉ còn một trường `translation` (~25 token). 160 là quá rộng
-    # và chỉ làm một lần kẹt vòng lặp tốn thêm 5 giây.
-    n_predict: int = 96
+    # Output chỉ còn một trường `translation`. Nhưng bản dịch KĨ thì dài hơn
+    # bản dịch lược, và câu nhiều mệnh đề cần chỗ — 96 từng cắt cụt.
+    n_predict: int = 160
     # Chống lặp. Quan sát thật: model kẹt sinh `”}”}”}...` tới hết n_predict.
     # Grammar không cấm được vì đó là ký tự hợp lệ BÊN TRONG chuỗi JSON.
     repeat_penalty: float = 1.15
-    temperature: float = 0.2
+    # Dịch lại một lần khi phát hiện bản dịch hỏng (chép nguyên văn hoặc sai
+    # ngôn ngữ). Model 2B thỉnh thoảng rơi vào chế độ chép — người dùng nghe
+    # câu tiếng Việt của chính mình đọc bằng giọng Anh thì vô dụng.
+    # Chỉ thử lại MỘT lần: tốn ~1 giây, và nếu lần hai vẫn hỏng thì lần ba
+    # cũng thế.
+    retry_on_bad_translation: bool = True
+    # Dịch cần bám sát, không cần sáng tạo. Càng thấp càng ít bịa từ và ít
+    # thay danh từ bằng "từ nghe hay hơn".
+    temperature: float = 0.1
     top_p: float = 0.9
     # Số layer offload lên GPU. None = lấy từ DeviceProfile.
     n_gpu_layers: int | None = None
