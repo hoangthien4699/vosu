@@ -13,10 +13,14 @@ paths:
   # "đủ nhanh và đủ chính xác để LLM hiểu intent", không phải "chính xác
   # tuyệt đối". Chỉ nâng nếu benchmark cho thấy Small thực sự không đủ.
   whisper_model: small
-  # Qwen3.5-2B Q8_0. Q8 chứ không phải Q4: model 2B nhỏ nên lượng tử hóa
-  # 4-bit làm hụt chất lượng dịch rõ hơn model lớn. Nhẹ hơn Gemma 3 4B Q4
-  # khoảng 500MB VRAM — khác biệt giữa "còn dự phòng" và "sát mép trần 5.5GB".
-  llm_gguf: models/qwen3.5-2b-q8_0.gguf
+  # Qwen3.5-4B Q4_K_M — 4B hết lỗi đảo nghĩa mà 2B mắc phải.
+  #
+  # CẢNH BÁO VRAM: RSS 2830MB. Cộng Whisper `small` (~1.8GB) + KV (~0.5GB) +
+  # CUDA overhead (~0.8GB) = ~5.9GB, VƯỢT trần 5.5GB của §3.1.
+  # Muốn dùng 4B trên GPU 6GB: hạ whisper_model xuống `base` (tổng còn ~5.1GB).
+  # Hoặc quay lại models/qwen3.5-2b-q8_0.gguf và chấp nhận lỗi đảo nghĩa.
+  # CHẠY benchmarks/b4_vram.py để có số thật trước khi chốt.
+  llm_gguf: models/qwen3.5-4b-q4_k_m.gguf
   llama_server_bin: models/llama-server
   piper_bin: piper
   piper_voice_vi: models/piper/vi_VN-vais1000-medium.onnx
@@ -47,8 +51,9 @@ llm:
   n_ctx: 2048
   # Bản dịch KĨ dài hơn bản dịch lược.
   n_predict: 160
-  # Dịch cần bám sát, không cần sáng tạo.
-  temperature: 0.1
+  # 0 = greedy. Dịch không cần sáng tạo, và greedy cho kết quả TÁI LẬP ĐƯỢC —
+  # ở 0.1 cùng cấu hình đo ra 80/83/86%, mọi so sánh A/B nằm trong nhiễu.
+  temperature: 0.0
   n_gpu_layers: null         # null -> DeviceProfile cuda = 36
   prompt_template: auto      # auto suy từ tên file GGUF
   # BẮT BUỘC với Gemma 3 (sliding-window attention): thiếu cờ này thì mỗi
