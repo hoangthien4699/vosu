@@ -81,6 +81,18 @@ class VadConfig:
     #
     # Đánh đổi: +500ms vào E2E mỗi câu so với mặc định cũ.
     min_silence_ms: int = 900
+    # Ngưỡng NGẮN, dùng khi câu đang nói đã dài hơn `long_utterance_s`.
+    #
+    # Một ngưỡng cố định không giải quyết được cả hai phía: 400ms cắt nhầm
+    # giữa câu người nói chậm, 900ms thì gộp nhiều câu thành một khối. Đo
+    # thật: file 13.8s ba câu ra ĐÚNG MỘT utterance, kết quả chỉ hiện ở giây
+    # thứ 11 — người dùng thấy như phần mềm "đọc hết rồi mới xử lý".
+    #
+    # Người ta ngập ngừng ở ĐẦU câu khi đang tìm chữ; khoảng nghỉ SAU khi đã
+    # nói trọn một ý thì gần như luôn là hết câu.
+    min_silence_after_ms: int = 550
+    #: Nói quá ngần này giây thì chuyển sang ngưỡng ngắn.
+    long_utterance_s: float = 2.5
     min_speech_ms: int = 200
     speech_pad_ms: int = 100
     # Ngưỡng để coi speech probability là "đang suy giảm" (dấu hiệu sắp dứt câu).

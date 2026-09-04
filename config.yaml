@@ -32,8 +32,16 @@ vad:
   threshold: 0.5
   # Ngưỡng im lặng để chốt câu — CỘNG THẲNG vào E2E.
   # Đo thật: 400ms cắt nhầm giữa câu 4 lần / gộp nhầm 0; 900ms là 1/1.
-  # Cắt nhầm tệ hơn gộp: nó cho ra bản dịch của một mảnh câu.
+  # Nhưng gộp nhầm hoá ra tệ hơn tôi tưởng: file 13.8s ba câu thoại ra ĐÚNG
+  # MỘT utterance, bản dịch chỉ hiện ở giây thứ 11 — người dùng thấy như phần
+  # mềm đọc hết đoạn rồi mới xử lý. Nên 900ms chỉ còn là ngưỡng cho câu NGẮN;
+  # câu đã dài thì dùng min_silence_after_ms bên dưới.
   min_silence_ms: 900        # §7 — cộng thẳng vào E2E, đừng hạ xuống 150ms
+  # Ngưỡng ngắn khi câu đã nói dài hơn long_utterance_s.
+  # Ngưỡng cố định thì hoặc cắt nhầm người nói chậm, hoặc gộp
+  # nhiều câu thành một khối và người dùng đợi hết đoạn mới thấy gì.
+  min_silence_after_ms: 550
+  long_utterance_s: 2.5
   min_speech_ms: 200
 
 chunker:
