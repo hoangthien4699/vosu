@@ -156,6 +156,21 @@ llm:
 
 tts:
   enabled: true
+  # piper | vieneu
+  #
+  # `vieneu` cho giọng truyền cảm hơn hẳn (20 giọng Bắc/Trung/Nam, có phong
+  # cách kể chuyện) và tiếng đầu tới NHANH HƠN Piper — 91ms so với 120ms ấm /
+  # 617ms nguội — vì model nằm sẵn trong tiến trình phụ sống lâu, không spawn
+  # lại mỗi câu. Đổi lại sinh chậm hơn ~3.5 lần (RTF 0.164 so với 0.047), vẫn
+  # dư 6.1x thời gian thực.
+  #
+  # Cần venv riêng: chạy scripts/setup_vieneu.sh. Không cài chung được vì gói
+  # `vieneu` phụ thuộc cứng vào gradio và librosa.
+  #
+  # Chiều đọc chậm để nói theo VẪN đi Piper dù đặt gì ở đây — VieNeu không có
+  # tham số tốc độ đọc.
+  engine: vieneu
+  vieneu_voice: Ngọc Huyền
   voice: vi
   auto_read_translation: true
   # Cắt lời đang đọc khi nghe thấy tiếng nói mới (§2.4.1 Barge-in).

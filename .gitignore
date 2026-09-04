@@ -33,3 +33,7 @@ config.local.yaml
 .DS_Store
 .idea/
 .vscode/
+
+# venv riêng cho VieNeu-TTS (scripts/setup_vieneu.sh)
+.venv-vieneu
+.venv-vieneu/

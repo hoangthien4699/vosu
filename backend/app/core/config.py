@@ -38,6 +38,10 @@ class PathsConfig:
     llm_gguf: str = "models/qwen3.5-4b-q4_k_m.gguf"
     llama_server_bin: str = "models/llama-server"
     piper_bin: str = "piper"
+    #: Python của venv RIÊNG cho VieNeu — gói `vieneu` phụ thuộc cứng vào
+    #: gradio/librosa nên không cài chung được. Xem scripts/setup_vieneu.sh.
+    vieneu_python: str = ".venv-vieneu/bin/python"
+    vieneu_sidecar: str = "scripts/vieneu_sidecar.py"
     piper_voice_vi: str = "models/piper/vi_VN-vais1000-medium.onnx"
     piper_voice_en: str = "models/piper/en_US-lessac-medium.onnx"
     silero_vad_onnx: str = "models/silero_vad.onnx"
@@ -231,6 +235,18 @@ class TtsConfig:
     voice: str = "vi"  # vi | en
     sample_rate: int = 22_050
     chunk_ms: int = 120
+    # piper | vieneu — xem ai/tts_router.py.
+    #
+    # `vieneu` cho giọng truyền cảm hơn hẳn và tiếng đầu tới nhanh hơn (91ms
+    # so với 120ms ấm / 617ms nguội của Piper), đổi lại sinh chậm hơn ~3.5 lần
+    # (RTF 0.164 so với 0.047) và cần gói `vieneu` (~240MB model int8 ONNX).
+    #
+    # Chiều đọc chậm để nói theo VẪN dùng Piper dù chọn gì: VieNeu không có
+    # tham số tốc độ đọc.
+    engine: str = "piper"
+    #: Giọng VieNeu. `list_preset_voices()` cho 20 lựa chọn, đủ Bắc/Trung/Nam
+    #: và các phong cách tin tức / tự nhiên / kể chuyện / đọc truyện.
+    vieneu_voice: str = "Ngọc Huyền"
     length_scale: float = 1.0
     # Tốc độ đọc khi dịch NGƯỢC (người dùng nói -> đọc tiếng đối phương).
     # Chậm hơn hẳn vì người dùng phải nói theo, không phải chỉ nghe hiểu.
