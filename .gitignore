@@ -18,8 +18,8 @@ benchmarks/results/*
 
 # --- Cấu hình cục bộ ---
 .env
-# config.yaml ĐƯỢC commit trên nhánh release: nó chính là thứ phân biệt nhánh
-# này với release-mac. Ghi đè cục bộ dùng config.local.yaml hoặc biến VOSU_*.
+# config.yaml ĐƯỢC commit trên nhánh release-mac: nó chính là thứ phân biệt
+# nhánh này với release. Ghi đè cục bộ dùng config.local.yaml hoặc VOSU_*.
 config.local.yaml
 
 # --- Audio mẫu ---
@@ -33,3 +33,7 @@ config.local.yaml
 .DS_Store
 .idea/
 .vscode/
+
+# venv riêng cho VieNeu-TTS (scripts/setup_vieneu.sh)
+.venv-vieneu
+.venv-vieneu/

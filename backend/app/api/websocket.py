@@ -35,7 +35,8 @@ from ..ai.direction import Direction
 from ..ai.direction import resolve as resolve_direction
 from ..ai.history import ConversationHistory
 from ..ai.llm import GenerationStats
-from ..ai.tts import PiperTts, SentenceSplitter, TtsUnavailable
+from ..ai.tts import SentenceSplitter, TtsUnavailable
+from ..ai.tts_router import create_tts
 from ..ai.verify import failure_reason, retry_hint
 from ..audio.chunker import AudioChunker, AudioSegment
 from ..audio.session import SessionState, UtteranceState
@@ -175,7 +176,7 @@ class CopilotSession:
         #: Chiều của lượt trước — dùng khi Whisper không nhận diện được ngôn
         #: ngữ (câu ngắn), thay vì đoán bừa.
         self._last_direction = Direction.TO_USER
-        self.tts = PiperTts(config) if config.tts.enabled else None
+        self.tts = create_tts(config) if config.tts.enabled else None
 
         vad = build_vad(config)
         self.chunker = AudioChunker(
@@ -236,6 +237,13 @@ class CopilotSession:
             self._tts_worker = asyncio.create_task(
                 self._tts_worker_loop(), name=f"tts-{self.session_id}"
             )
+
+        if self.tts is not None and getattr(self.tts, "needs_preload", False):
+            # Engine có model thường trú thì nạp NGAY từ bây giờ, ở nền — tới
+            # lúc bản dịch đầu tiên xong (~6s) là vừa kịp. Piper không cần:
+            # nó hâm nóng tiến trình dự phòng SAU mỗi lượt đọc, và làm ở đây
+            # chỉ tổ spawn thừa một tiến trình cho mọi session.
+            self.tts.prewarm()
 
         await self.bus.emit(
             EventType.SESSION_STARTED,
@@ -1108,7 +1116,7 @@ class CopilotSession:
             EventType.TTS_STARTED,
             utterance_id=utterance_id,
             data={"utterance_field": field, "text": text, "voice": voice,
-                  "sample_rate": self.config.tts.sample_rate},
+                  "sample_rate": self.tts.sample_rate},
         )
 
         import time as _time
@@ -1124,7 +1132,7 @@ class CopilotSession:
                     EventType.TTS_AUDIO_CHUNK,
                     utterance_id=utterance_id,
                     data={"chunk_index": chunks, "bytes": len(audio),
-                          "sample_rate": self.config.tts.sample_rate},
+                          "sample_rate": self.tts.sample_rate},
                     binary=audio,
                 )
         except asyncio.CancelledError:

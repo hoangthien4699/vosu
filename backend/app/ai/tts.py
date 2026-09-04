@@ -105,6 +105,13 @@ class CancelResult:
 class PiperTts:
     """Một engine TTS cho một session. Mỗi lúc chỉ đọc một job."""
 
+    #: Piper đổi được tốc độ đọc qua --length-scale. VieNeu thì không — router
+    #: dựa vào cờ này để chọn engine cho chiều đọc chậm.
+    supports_length_scale = True
+    #: Piper không có model thường trú để nạp trước. Hâm nóng tiến trình dự
+    #: phòng là việc làm SAU mỗi lượt đọc, không phải lúc mở session.
+    needs_preload = False
+
     def __init__(self, config) -> None:
         self._config = config
         self._state = TtsState.IDLE
@@ -130,6 +137,10 @@ class PiperTts:
         self.used_standby = False
 
     # -- trạng thái ------------------------------------------------------- #
+
+    @property
+    def sample_rate(self) -> int:
+        return self._config.tts.sample_rate
 
     @property
     def state(self) -> TtsState:
