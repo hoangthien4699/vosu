@@ -277,6 +277,11 @@ class SessionConfig:
     #: luôn được báo ra client, không im lặng.
     max_pending_utterances: int = 3
     max_concurrent_sessions: int = 1
+    #: Chờ ngần này giây cho chỗ trống trước khi từ chối kết nối mới. Cùng một
+    #: client nối lại thì kết nối mới thường tới trước khi server kịp dọn xong
+    #: kết nối cũ — từ chối ở nhịp đó là bắt người dùng tải lại trang cho một
+    #: lỗi thuần thời điểm.
+    session_slot_wait_s: float = 3.0
     idle_timeout_s: float = 180.0  # §8 Giai đoạn 4 — giải phóng VRAM sau 3 phút
     # Backpressure (F5): số chunk audio tối đa xếp hàng trước khi cảnh báo/drop.
     audio_queue_maxsize: int = 256

@@ -214,11 +214,38 @@ class ModelRuntime:
 
     # -- session (consumer) ----------------------------------------------- #
 
+    async def _wait_for_slot(self, session_id: str) -> None:
+        """Chờ một nhịp ngắn cho chỗ trống trước khi từ chối.
+
+        Cùng MỘT client nối lại (chọn file khác, đổi thiết bị, mạng chớp) thì
+        kết nối mới thường tới TRƯỚC khi server kịp dọn xong kết nối cũ —
+        `ws.close()` phía trình duyệt trả về ngay, còn phía này còn phải hủy
+        các worker rồi mới nhả chỗ. Từ chối thẳng ở nhịp đó là bắt người dùng
+        tải lại trang cho một lỗi thuần thời điểm.
+
+        Chờ có giới hạn: hết giờ mà vẫn đầy thì đúng là đang có client khác
+        thật, và lỗi từ chối là câu trả lời đúng.
+        """
+        limit = self._config.session.max_concurrent_sessions
+        deadline = time.monotonic() + self._config.session.session_slot_wait_s
+        waited = False
+        while True:
+            async with self._lock:
+                if len(self._active_sessions) < limit:
+                    break
+            if time.monotonic() >= deadline:
+                return
+            waited = True
+            await asyncio.sleep(0.05)
+        if waited:
+            logger.info("%s: đã chờ chỗ trống từ session cũ", session_id)
+
     @contextlib.asynccontextmanager
     async def session(self, session_id: str) -> AsyncIterator[ModelRuntime]:
         """Đăng ký một session. KHÔNG hạ model khi thoát."""
         # Idle timeout có thể đã thu hồi model — nạp lại trước khi nhận session.
         await self.ensure_ready()
+        await self._wait_for_slot(session_id)
         async with self._lock:
             limit = self._config.session.max_concurrent_sessions
             if len(self._active_sessions) >= limit:

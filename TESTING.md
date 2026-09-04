@@ -201,6 +201,13 @@ thống spawn sẵn tiến trình cho lượt sau trong lúc còn rảnh. Trư�
 `prewarmed` trong `tts_done` cho biết lượt nào dùng được (câu đầu thì không,
 vì chưa có gì để hâm).
 
+Chọn file khác mà **không tải lại trang** thì client đóng hẳn kết nối cũ rồi
+mới mở cái mới. `ws.close()` chỉ là *yêu cầu* đóng — nó trả về ngay còn server
+thì phải hủy xong các worker mới nhả chỗ, nên mở ngay sau đó là chạy đua với
+chính mình và bị từ chối "đã đạt giới hạn 1 session". Server cũng chờ tối đa
+`session.session_slot_wait_s` (3s) cho chỗ trống trước khi từ chối. Cần cả
+hai: đo thật thì chỉ sửa phía client vẫn còn thua cuộc đua.
+
 Nút **"Tạm dừng"** cho bạn kiểm soát tay bất cứ lúc nào. Bấm "Tiếp tục" sẽ hủy
 lượt đọc đang dở và phát tiếp ngay.
 
