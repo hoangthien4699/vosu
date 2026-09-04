@@ -34,6 +34,12 @@ class EventType(str, Enum):
     #: `stt_final` thì file đã chạy quá thêm ~1.9s (thời gian Whisper nghe),
     #: tức là đã phát lấn sang câu sau rồi mới dừng.
     UTTERANCE_ENDPOINT = "utterance_endpoint"
+    #: Nghe ra câu còn dở — đang chờ người ta nói tiếp để ghép.
+    #:
+    #: Client phát file PHẢI phát tiếp khi nhận cái này: nó đã dừng file ở
+    #: `utterance_endpoint`, không báo thì audio cần để quyết định sẽ không
+    #: bao giờ tới và file dừng vĩnh viễn.
+    UTTERANCE_CONTINUED = "utterance_continued"
     STT_PARTIAL = "stt_partial"
     STT_FINAL = "stt_final"
 
@@ -67,6 +73,7 @@ BINARY_EVENTS = frozenset({EventType.TTS_AUDIO_CHUNK})
 UTTERANCE_SCOPED = frozenset(
     {
         EventType.UTTERANCE_ENDPOINT,
+        EventType.UTTERANCE_CONTINUED,
         EventType.STT_PARTIAL,
         EventType.STT_FINAL,
         EventType.COPILOT_STARTED,
