@@ -61,8 +61,17 @@ Rules, in order of priority:
 5. Read times, dates and numbers the way a person means them out loud: "by
    three" is three o'clock, not the third day; "this afternoon" is the
    afternoon, not the evening.
-6. Within those constraints, make it sound like natural spoken {target} rather
-   than written prose.
+6. Write the way people TALK, not the way documents are written. Reach for the
+   everyday phrasing:
+     "ngay cả khi"                   -> "dù", "cho dù"
+     "Việc đó có được không?"        -> "Vậy được không?"
+     "Chúng ta đang nghĩ về việc..." -> "Bên mình đang tính..."
+     "dư địa"                        -> "thời gian dư", "chỗ xoay xở"
+   Where a conversational sentence would naturally end with "nhé", "ạ", "nhỉ",
+   "đấy" or "thôi", use it.
+
+   This is about WORDING ONLY. Never change what the sentence means in order to
+   sound more casual.
 - Translate only. Do not answer, explain, or add commentary.{history}"""
 
 _TO_COUNTERPART = """You are a live interpreter for a user wearing earbuds.
@@ -295,13 +304,17 @@ def build_prompt(
         history=history,
             retry_hint=retry_hint,
     )
-    speaker = "You" if direction is Direction.TO_COUNTERPART else "Them"
     # Phân định thật rõ câu cần dịch với khối lịch sử. Model 2B đã từng dịch
     # nhầm một dòng trong lịch sử thay vì câu hiện tại — với ranh giới mờ thì
     # model càng nhỏ càng dễ lạc.
+    #
+    # KHÔNG gắn nhãn "Them said:" vào câu: system prompt đã nói rõ ai đang nói
+    # theo chiều dịch, nên nhãn là thừa — và model 4B dịch luôn cả nhãn, cho ra
+    # "Họ nói: Đừng gửi nó...".
     user = (
-        f"TRANSLATE EXACTLY THIS ONE LINE, nothing else.\n"
-        f"{speaker} said: {text}"
+        f"TRANSLATE EXACTLY THIS ONE LINE, nothing else. "
+        f"Output only the translation of it:\n"
+        f"{text}"
     )
     if retry_hint:
         # Lần dịch lại: lời nhắc nằm SAU câu cần dịch để nó là thứ model

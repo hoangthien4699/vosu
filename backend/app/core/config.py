@@ -35,7 +35,7 @@ class PathsConfig:
     models_dir: str = "models"
     # faster-whisper: tên model trên HF hoặc đường dẫn thư mục đã convert.
     whisper_model: str = "small"
-    llm_gguf: str = "models/qwen3.5-2b-q8_0.gguf"
+    llm_gguf: str = "models/qwen3.5-4b-q4_k_m.gguf"
     llama_server_bin: str = "models/llama-server"
     piper_bin: str = "piper"
     piper_voice_vi: str = "models/piper/vi_VN-vais1000-medium.onnx"
@@ -130,9 +130,10 @@ class LlmConfig:
     # Chỉ thử lại MỘT lần: tốn ~1 giây, và nếu lần hai vẫn hỏng thì lần ba
     # cũng thế.
     retry_on_bad_translation: bool = True
-    # Dịch cần bám sát, không cần sáng tạo. Càng thấp càng ít bịa từ và ít
-    # thay danh từ bằng "từ nghe hay hơn".
-    temperature: float = 0.1
+    # 0 = greedy. Dịch không phải việc cần sáng tạo, và greedy còn cho kết quả
+    # TÁI LẬP ĐƯỢC — ở 0.1, cùng một cấu hình đo ra 80%, 83%, 86% qua ba lần
+    # chạy, tức mọi so sánh A/B đều nằm trong nhiễu và không kết luận được gì.
+    temperature: float = 0.0
     top_p: float = 0.9
     # Số layer offload lên GPU. None = lấy từ DeviceProfile.
     n_gpu_layers: int | None = None
