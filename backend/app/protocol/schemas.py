@@ -103,10 +103,19 @@ class TtsAudioChunkData(_Strict):
 class TtsDoneData(_Strict):
     chunks: int = Field(ge=0)
     synthesis_ms: float = Field(ge=0.0)
+    #: Có dùng được tiến trình Piper hâm nóng sẵn không. Đưa ra đây để quan sát
+    #: được: nếu luôn False thì việc hâm nóng đang vô ích mà không gì báo.
+    prewarmed: bool = False
 
 
 class TtsCancelledData(_Strict):
-    reason: Literal["barge_in", "new_utterance", "session_end", "client_request"]
+    reason: Literal[
+        "barge_in", "new_utterance", "session_end", "client_request",
+        # Hủy lượt đọc bản dịch hỏng trước khi dịch lại — không để người dùng
+        # nghe câu tiếng mình đọc bằng giọng nước ngoài.
+        "bad_translation",
+        "reset",
+    ]
     #: §2.4.1 / B8 — thời gian từ lúc nhận tín hiệu tới lúc thực sự dừng phát.
     response_ms: float = Field(ge=0.0)
     chunks_sent: int = Field(default=0, ge=0)

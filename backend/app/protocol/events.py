@@ -186,11 +186,26 @@ class EventBus:
         return await self._queue.get()
 
     async def close(self) -> None:
-        """Đóng bus, đánh thức consumer đang chờ bằng sentinel None."""
+        """Đóng bus, đánh thức consumer đang chờ bằng sentinel None.
+
+        KHÔNG ĐƯỢC CHỜ. Nếu consumer đã chết (client ngắt giữa chừng) thì hàng
+        đợi đầy và không ai rút ra nữa — `await put()` sẽ treo vĩnh viễn, kéo
+        theo cả `run()` của session không bao giờ trả về. Session đó ở lại
+        trong sổ đếm và mọi kết nối sau đều bị từ chối "đã đạt giới hạn 1
+        session", cho tới khi khởi động lại server. Đã gặp thật.
+        """
         if self._closed:
             return
         self._closed = True
-        await self._queue.put(None)
+        while True:
+            try:
+                self._queue.put_nowait(None)
+                return
+            except asyncio.QueueFull:
+                try:
+                    self._queue.get_nowait()   # dọn chỗ cho sentinel
+                except asyncio.QueueEmpty:
+                    return                     # consumer vừa rút hết — thôi
 
     def __aiter__(self) -> EventBus:
         return self

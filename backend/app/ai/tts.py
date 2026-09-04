@@ -113,6 +113,21 @@ class PiperTts:
         self._cancel_event = asyncio.Event()
         self._chunks_sent = 0
         self._lock = asyncio.Lock()
+        #: Một tiến trình Piper đã spawn sẵn và nạp xong model, đang chờ text.
+        #:
+        #: Piper nạp model NGAY LÚC KHỞI ĐỘNG, không đợi có input. Đo thật:
+        #: spawn rồi gửi ngay mất 617ms tới byte đầu; spawn trước rồi mới gửi
+        #: chỉ 120ms. Tức mỗi câu đang mất ~500ms chỉ để nạp lại đúng cái model
+        #: vừa dùng xong.
+        #:
+        #: Gắn với (model, tốc độ đọc) vì cả hai là tham số dòng lệnh, không
+        #: đổi được sau khi đã spawn.
+        self._standby: tuple[tuple[str, float], asyncio.subprocess.Process] | None = None
+        self._standby_task: asyncio.Task | None = None
+        #: Lượt đọc gần nhất có dùng được tiến trình hâm nóng sẵn không.
+        #: Đưa ra event để quan sát được — nếu nó luôn False thì việc hâm nóng
+        #: đang vô ích mà không có gì báo.
+        self.used_standby = False
 
     # -- trạng thái ------------------------------------------------------- #
 
@@ -193,28 +208,16 @@ class PiperTts:
             self._transition(TtsState.SYNTHESIZING)
 
         model = self.resolve_voice(voice)
-        cmd = [
-            _absolute_binary(self._config.paths.piper_bin),
-            "--model", str(model),
-            "--output-raw",
-            # Số càng lớn đọc càng chậm. Chiều dịch ngược dùng giá trị lớn hơn
-            # vì người dùng phải nói theo, không chỉ nghe hiểu.
-            "--length-scale", str(
-                length_scale if length_scale is not None
-                else self._config.tts.length_scale
-            ),
-        ]
+        scale = (
+            length_scale if length_scale is not None
+            else self._config.tts.length_scale
+        )
+        cmd = self._command(model, scale)
 
+        key = (str(model), scale)
+        self.used_standby = False
         try:
-            self._process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                # BẮT BUỘC — xem _absolute_binary(): ép CPython dùng
-                # posix_spawn() thay vì fork()+exec().
-                close_fds=False,
-            )
+            self._process = self._take_standby(key) or await self._spawn(cmd)
         except OSError as exc:
             self._transition(TtsState.ERROR)
             raise TtsUnavailable(f"Không khởi động được Piper: {exc}") from exc
@@ -319,6 +322,87 @@ class PiperTts:
         )
         return CancelResult(True, response_ms, self._chunks_sent, reason)
 
+    # -- tiến trình Piper hâm nóng sẵn ------------------------------------ #
+
+    def _command(self, model: Path, scale: float) -> list[str]:
+        return [
+            _absolute_binary(self._config.paths.piper_bin),
+            "--model", str(model),
+            "--output-raw",
+            # Số càng lớn đọc càng chậm. Chiều dịch ngược dùng giá trị lớn hơn
+            # vì người dùng phải nói theo, không chỉ nghe hiểu.
+            "--length-scale", str(scale),
+        ]
+
+    async def _spawn(self, cmd: list[str]) -> asyncio.subprocess.Process:
+        return await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            # BẮT BUỘC — xem _absolute_binary(): ép CPython dùng
+            # posix_spawn() thay vì fork()+exec().
+            close_fds=False,
+        )
+
+    def _take_standby(self, key: tuple[str, float]) -> asyncio.subprocess.Process | None:
+        """Lấy tiến trình đã hâm nóng nếu nó đúng giọng và đúng tốc độ."""
+        standby, self._standby = self._standby, None
+        if standby is None:
+            return None
+        standby_key, process = standby
+        if standby_key != key or process.returncode is not None:
+            # Sai giọng/tốc độ, hoặc nó đã chết. Dọn đi, spawn cái mới.
+            self._kill_quietly(process)
+            return None
+        self.used_standby = True
+        logger.debug("TTS dùng tiến trình đã hâm nóng sẵn")
+        return process
+
+    def prewarm(self, voice: str | None = None, length_scale: float | None = None) -> None:
+        """Spawn sẵn tiến trình Piper cho lượt đọc kế tiếp.
+
+        Gọi sau khi đọc xong: lượt sau gần như luôn cùng giọng và cùng tốc độ,
+        nên model đã nằm sẵn trong bộ nhớ và byte đầu ra nhanh hơn ~500ms.
+        Không chờ — spawn chạy nền, hỏng thì lượt sau chỉ quay về đường cũ.
+        """
+        if self._standby is not None or self._standby_task is not None:
+            return
+        try:
+            model = self.resolve_voice(voice)
+        except Exception:
+            return
+        scale = (
+            length_scale if length_scale is not None
+            else self._config.tts.length_scale
+        )
+        key = (str(model), scale)
+
+        async def run() -> None:
+            try:
+                process = await self._spawn(self._command(model, scale))
+            except OSError:
+                return
+            finally:
+                self._standby_task = None
+            self._standby = (key, process)
+
+        self._standby_task = asyncio.create_task(run(), name="piper-prewarm")
+
+    def _kill_quietly(self, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError, Exception):
+            process.kill()
+
+    def _drop_standby(self) -> None:
+        if self._standby_task is not None and not self._standby_task.done():
+            self._standby_task.cancel()
+        self._standby_task = None
+        standby, self._standby = self._standby, None
+        if standby is not None:
+            self._kill_quietly(standby[1])
+
     async def _terminate_process(self) -> None:
         process, self._process = self._process, None
         if process is None or process.returncode is not None:
@@ -351,6 +435,7 @@ class PiperTts:
 
     async def close(self) -> None:
         self._cancel_event.set()
+        self._drop_standby()
         await self._terminate_process()
 
 

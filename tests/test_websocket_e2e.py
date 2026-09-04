@@ -1101,3 +1101,37 @@ def _fake_transcript():
         text="So what I am trying to say is", language="en",
         language_probability=0.9, is_final=True, audio_s=1.0, latency_ms=10.0,
     )
+
+
+def test_dong_bus_khong_treo_khi_hang_doi_day_va_khong_ai_rut():
+    """Client ngắt giữa chừng thì consumer chết, hàng đợi đầy dần.
+
+    `close()` mà `await put(None)` lúc đó sẽ treo vĩnh viễn, kéo theo `run()`
+    của session không bao giờ trả về. Session ở lại trong sổ đếm và MỌI kết nối
+    sau đều bị từ chối "đã đạt giới hạn 1 session" cho tới khi restart server.
+    Đã gặp thật: active_sessions kẹt ở 1 suốt 157 giây.
+    """
+    from app.protocol.events import EventBus, EventType
+
+    async def scenario():
+        bus = EventBus("sess_x", maxsize=4)
+        for _ in range(4):                      # nhét đầy, không ai rút
+            await bus.emit(EventType.STT_PARTIAL, utterance_id="utt_001")
+        assert bus._queue.full()
+        await asyncio.wait_for(bus.close(), timeout=2.0)
+
+    asyncio.run(scenario())     # hết giờ = đỏ
+
+
+def test_bus_da_dong_thi_khong_nhan_them_event():
+    from app.protocol.events import EventBus, EventType
+
+    async def scenario():
+        bus = EventBus("sess_x", maxsize=4)
+        await bus.close()
+        await bus.emit(EventType.STT_PARTIAL, utterance_id="utt_001")
+        return bus
+
+    bus = asyncio.run(scenario())
+    # Chỉ còn đúng sentinel, event sau khi đóng bị bỏ.
+    assert bus._queue.qsize() == 1
