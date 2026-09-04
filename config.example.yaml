@@ -57,9 +57,10 @@ llm:
   n_ctx: 2048
   # Bản dịch KĨ dài hơn bản dịch lược, và câu nhiều mệnh đề cần chỗ.
   n_predict: 160
-  # Dịch cần bám sát, không cần sáng tạo. Càng thấp càng ít bịa từ và ít thay
-  # danh từ bằng "từ nghe hay hơn".
-  temperature: 0.1
+  # 0 = greedy. Dịch không cần sáng tạo, và greedy cho kết quả TÁI LẬP ĐƯỢC —
+  # ở 0.1 cùng cấu hình đo ra 80/83/86% qua ba lần chạy, mọi so sánh A/B đều
+  # nằm trong nhiễu.
+  temperature: 0.0
   n_gpu_layers: null             # null = lấy từ device profile (CUDA 36, Metal 99)
   # auto | chatml | gemma — "auto" suy từ tên file GGUF.
   # Dùng sai template thì model vẫn sinh chữ, chỉ là chất lượng tệ đi khó
