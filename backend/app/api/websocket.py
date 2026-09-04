@@ -331,6 +331,11 @@ class CopilotSession:
             return
         if self._loop is None:
             return
+        if not self.config.tts.barge_in:
+            # Xem TtsConfig.barge_in: tiếng nói mới ở sản phẩm này thường là
+            # đối phương nói tiếp, không phải người dùng chen ngang. Cắt lời
+            # lúc đó là làm mất chính nội dung họ cần nghe.
+            return
         if self.tts is not None and self.tts.is_active:
             self._loop.create_task(self._barge_in())
 
@@ -973,12 +978,53 @@ class CopilotSession:
             return
         if not text.strip():
             return
+        self._trim_read_backlog(manual)
         self._tts_queue.put_nowait(
             _TtsItem(
                 utterance_id, text, field,
                 manual=manual, voice=voice, length_scale=length_scale,
             )
         )
+
+    def _trim_read_backlog(self, manual: bool) -> None:
+        """Chặn hàng đợi đọc phình vô hạn khi người ta nói nhanh hơn máy đọc.
+
+        Từ khi bỏ cắt lời (xem TtsConfig.barge_in), mọi bản dịch đều được đọc
+        trọn — đúng thứ người dùng cần. Nhưng đọc một câu mất ~2.5-3s trong khi
+        người nói nhanh có thể ra câu mới mỗi ~3s: nếu đọc chậm hơn nhịp nói
+        thì phần đọc tụt lại mãi và cuối cùng người dùng nghe bản dịch của
+        chuyện xảy ra một phút trước.
+
+        Vượt hạn thì bỏ bản CŨ NHẤT chứ không bỏ bản mới: bản cũ đã lạc hậu so
+        với cuộc nói chuyện. Và phải BÁO RA — mất một câu trong im lặng còn tệ
+        hơn chính việc mất câu.
+
+        Yêu cầu đọc thủ công (client tự điều phối) không bị cắt: lúc đó client
+        đang chờ đúng lượt đọc đó, bỏ đi là nó treo.
+        """
+        if manual:
+            return
+        limit = self.config.tts.max_pending_reads
+        while self._tts_queue.qsize() > limit:
+            try:
+                stale = self._tts_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            if stale is None or stale.is_end or stale.manual:
+                # Không phải mẩu chữ để đọc -> trả lại, đừng làm hỏng trạng thái.
+                self._tts_queue.put_nowait(stale)
+                return
+            logger.warning(
+                "%s: đọc không kịp nhịp nói, bỏ bản dịch cũ của %s",
+                self.session_id, stale.utterance_id,
+            )
+            self._loop.create_task(
+                self.bus.emit(
+                    EventType.UTTERANCE_DROPPED,
+                    utterance_id=stale.utterance_id,
+                    data={"reason": "read_backlog", "pending": limit},
+                )
+            )
 
     def _mark_speech_end(self, utterance_id: str) -> None:
         if self.tts is None or not self._tts_available:
