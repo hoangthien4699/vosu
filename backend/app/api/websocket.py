@@ -28,7 +28,7 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..ai.copilot import SemanticEventParser, TranslationDelta
+from ..ai.copilot import SemanticEventParser, TranslationDelta, clean_value
 from ..ai.direction import Direction
 from ..ai.direction import resolve as resolve_direction
 from ..ai.history import ConversationHistory
@@ -530,7 +530,19 @@ class CopilotSession:
                 self._speak_translation(utterance_id, sentence)
 
     def _speak_translation(self, utterance_id: str, text: str) -> None:
-        """Đọc bản dịch, đúng giọng và đúng tốc độ cho chiều hiện tại."""
+        """Đọc bản dịch, đúng giọng và đúng tốc độ cho chiều hiện tại.
+
+        Dọn rác NGAY TẠI ĐÂY chứ không dựa vào việc `result.translation` đã
+        được dọn: các mẩu câu đi tới TTS được cắt ra TRONG LÚC token còn đang
+        về, trước khi chuỗi JSON đóng và `clean_value` kịp chạy. Không dọn ở
+        đây thì người dùng NHÌN thấy bản dịch sạch nhưng NGHE thấy rác — đã
+        quan sát thật với `"...nên hoãn.},{"`.
+        """
+        text = clean_value(text)
+        if not any(ch.isalnum() for ch in text):
+            # Mẩu chỉ toàn dấu và ký tự cấu trúc — không có gì để đọc.
+            return
+
         direction = self._last_direction
         if direction.is_outbound:
             # Người dùng phải NÓI THEO, không chỉ nghe hiểu — đọc chậm hẳn và
