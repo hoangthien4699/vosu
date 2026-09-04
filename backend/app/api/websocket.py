@@ -374,6 +374,18 @@ class CopilotSession:
 
         self._pipeline_queue.put_nowait(_PipelineItem(segment, utterance.id))
 
+        # Báo NGAY, trước khi STT chạy: client phát file dừng đúng chỗ câu vừa
+        # dứt thay vì đợi `stt_final` (chậm hơn ~1.9s, đã lấn sang câu sau).
+        await self.bus.emit(
+            EventType.UTTERANCE_ENDPOINT,
+            utterance_id=utterance.id,
+            data={
+                "start_s": round(max(0.0, segment.start_s), 3),
+                "duration_s": round(segment.duration_s, 3),
+                "trigger": segment.trigger,
+            },
+        )
+
     async def _pipeline_worker_loop(self) -> None:
         """Chạy từng câu một, đúng thứ tự nghe được.
 

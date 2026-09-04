@@ -951,3 +951,25 @@ def test_moi_cau_deu_duoc_doc_thanh_tieng(tts_client):
     spoken = {e["utterance_id"] for e in events if e["type"] == "tts_started"}
     assert len(heard) == 3, f"phải nghe được cả ba câu, mới có {sorted(heard)}"
     assert spoken == heard, f"nghe được mà không đọc: {sorted(heard - spoken)}"
+
+
+def test_bao_moc_het_cau_truoc_khi_stt_chay(client):
+    """`utterance_endpoint` phải tới TRƯỚC `stt_final` của cùng câu đó.
+
+    Client phát file dùng mốc này để dừng đúng chỗ câu vừa dứt. Nếu đợi
+    `stt_final` thì file đã phát lấn sang câu sau ~1.9s (thời gian Whisper
+    nghe) — đúng cái làm người dùng nghe hai câu chồng lên nhau.
+    """
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        events = send_utterance(ws)
+
+    types = [(e["type"], e["utterance_id"]) for e in events
+             if e["type"] in ("utterance_endpoint", "stt_final")]
+    assert types, "không có sự kiện nào"
+    assert types[0][0] == "utterance_endpoint", f"thứ tự sai: {types}"
+    assert types[0][1] == types[1][1], "hai sự kiện phải cùng utterance_id"
+
+    endpoint = next(e for e in events if e["type"] == "utterance_endpoint")
+    assert endpoint["data"]["trigger"] == "vad_endpoint"
+    assert endpoint["data"]["duration_s"] > 0
