@@ -163,6 +163,9 @@ session:
   # Chỉ là mặc định ban đầu; sau khi nghe họ nói thì lấy theo thực tế.
   counterpart_language: en
   max_concurrent_sessions: 1
+  # Chờ ngần này giây cho chỗ trống trước khi từ chối kết nối mới —
+  # cùng một client nối lại thường tới trước khi server dọn xong phiên cũ.
+  session_slot_wait_s: 3.0
   idle_timeout_s: 180.0
 
 server:
