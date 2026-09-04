@@ -136,9 +136,17 @@ class SttConfig:
     # (700ms). Nên xét thêm NỘI DUNG transcript (xem ai/completeness.py):
     # nghe ra câu còn dở thì giữ lại, chờ xem có nói tiếp không rồi ghép.
     merge_incomplete: bool = True
-    #: Chờ ngần này rồi vẫn không ai nói tiếp thì dịch nguyên câu dở — người ta
-    #: có quyền bỏ lửng câu, giữ mãi là mất hẳn câu đó.
+    #: Chờ nghe thêm ngần này (ĐỒNG HỒ AUDIO, không phải đồng hồ thật) mà
+    #: không ai nói tiếp thì dịch nguyên câu dở — người ta có quyền bỏ lửng
+    #: câu, giữ mãi là mất hẳn câu đó.
+    #:
+    #: Phải đo bằng đồng hồ audio: ở chế độ dừng-từng-câu, client dừng file
+    #: ngay tại endpoint nên trong lúc chờ KHÔNG có audio nào chạy. Đo bằng
+    #: đồng hồ thật thì cửa sổ tự hết giờ trước khi đoạn nói tiếp kịp tới và
+    #: câu không bao giờ được ghép — đã đo thấy đúng như vậy.
     merge_window_ms: int = 1200
+    #: Backstop bằng đồng hồ thật, phòng khi client ngừng gửi audio hẳn.
+    merge_backstop_s: float = 15.0
     #: Ghép tối đa ngần này lần cho một câu. Chặn trường hợp heuristic đọc sai
     #: liên tục làm câu dài vô hạn và độ trễ tăng không giới hạn.
     max_merges: int = 2

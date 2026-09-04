@@ -18,8 +18,9 @@ from fastapi.testclient import TestClient
 
 from app.ai.llm import CHATML, build_prompt
 from app.ai.stt import Transcript
-from app.api.websocket import router
+from app.api.websocket import _HeldSegment, router
 from app.audio.chunker import AudioSegment, SegmentKind
+from app.audio.session import UtteranceState
 from app.core.config import load_config
 from app.protocol.events import EventType
 from tests.synth import SR, silence, speech
@@ -987,6 +988,9 @@ def test_cau_bi_ngat_giua_chung_duoc_ghep_lai_thanh_mot(client):
     (800ms) còn DÀI HƠN khoảng nghỉ giữa hai câu của người bình thường (700ms).
     Không có ngưỡng thời gian nào đúng cho cả hai, nên phải xét nội dung.
     """
+    # Fixture chèn 1.2s im lặng ở đuôi mỗi câu; nới cửa sổ để phép thử nói về
+    # CƠ CHẾ ghép, không phải về việc chọn con số cửa sổ bao nhiêu.
+    client.app.state.config.stt.merge_window_ms = 6000
     stt = client.app.state.runtime.stt
     stt.script = [
         "So what I am trying to say is",                        # nghe lần 1: dở
@@ -1028,3 +1032,72 @@ def test_cau_tron_thi_khong_bi_giu_lai(client):
         ws.receive()
         events = send_utterance(ws)
     assert not [e for e in events if e["type"] == "utterance_continued"]
+
+
+def test_khong_bo_cho_ghep_khi_doan_noi_tiep_dang_xep_hang(client):
+    """Cuộc đua đã gặp thật: đoạn nói tiếp vừa chốt endpoint và đang xếp hàng
+    chờ nghe, thì hàm hết-giờ chạy trước và dịch riêng câu dở — thua cuộc đua
+    ngay trước lúc chặng nghe kịp ghép.
+
+    Đo trên file thật: câu bị ngắt ra 4 lượt đọc thay vì 2.
+    """
+    from app.api.websocket import CopilotSession
+
+    config = client.app.state.config
+    session = CopilotSession(
+        websocket=None, runtime=client.app.state.runtime, config=config,
+        session_id="sess_race",
+    )
+    segment = AudioSegment(
+        kind=SegmentKind.FINAL, pcm=np.zeros(SR, dtype=np.float32),
+        sample_rate=SR, start_s=0.0, duration_s=1.0, trigger="test",
+    )
+
+    async def scenario():
+        utt = session.state.begin_utterance()
+        session._held = _HeldSegment(segment, None, utt.id, 0)
+        # Đoạn nói tiếp đã chốt endpoint, đang chờ tới lượt nghe.
+        session._pipeline_queue.put_nowait(object())
+        assert session._pipeline_pending()
+        # Đồng hồ audio đã vượt xa cửa sổ chờ.
+        session.chunker._vad._samples_seen = 0
+        session.chunker._stream_s = 99.0
+        await session._expire_hold_by_audio()
+        return session._held
+
+    still_held = asyncio.run(scenario())
+    assert still_held is not None, (
+        "đã bỏ chờ trong lúc đoạn nói tiếp còn đang xếp hàng — câu sẽ bị cắt đôi"
+    )
+
+
+def test_bo_cho_ghep_khi_that_su_khong_ai_noi_tiep(client):
+    """Mặt kia của cùng một hàm: im lặng thật thì phải thôi chờ, không giữ mãi."""
+    from app.api.websocket import CopilotSession
+
+    config = client.app.state.config
+    session = CopilotSession(
+        websocket=None, runtime=client.app.state.runtime, config=config,
+        session_id="sess_flush",
+    )
+    segment = AudioSegment(
+        kind=SegmentKind.FINAL, pcm=np.zeros(SR, dtype=np.float32),
+        sample_rate=SR, start_s=0.0, duration_s=1.0, trigger="test",
+    )
+
+    async def scenario():
+        utt = session.state.begin_utterance()
+        session.state.transition(utt.id, UtteranceState.TRANSCRIBING)
+        session._held = _HeldSegment(segment, _fake_transcript(), utt.id, 0)
+        session.chunker._stream_s = 99.0        # đã nghe thêm rất lâu
+        await session._expire_hold_by_audio()   # hàng đợi rỗng, VAD im
+        return session._held
+
+    assert asyncio.run(scenario()) is None, "im lặng thật mà vẫn giữ thì mất câu"
+
+
+def _fake_transcript():
+    return Transcript(
+        text="So what I am trying to say is", language="en",
+        language_probability=0.9, is_final=True, audio_s=1.0, latency_ms=10.0,
+    )

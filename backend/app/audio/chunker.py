@@ -173,6 +173,17 @@ class AudioChunker:
             else:
                 self._preroll_frames.append(frame)
 
+    @property
+    def stream_s(self) -> float:
+        """Đã nạp vào bao nhiêu giây AUDIO tính từ đầu phiên.
+
+        Khác đồng hồ thật: lúc client dừng phát file thì đồng hồ này đứng yên.
+        Mọi cửa sổ chờ liên quan tới lời nói phải đo bằng cái này, không đo
+        bằng đồng hồ thật — nếu không thì client dừng file là cửa sổ tự hết
+        giờ dù chưa nghe thêm được gì.
+        """
+        return self._stream_s
+
     def feed_bytes(self, pcm16: bytes) -> Iterator[AudioSegment]:
         from .vad import pcm16_to_float32
 

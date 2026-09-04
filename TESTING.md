@@ -93,6 +93,13 @@ tiếp thì **ghép audio rồi nghe lại trên đoạn liền** — nghe lại
 hai transcript, vì Whisper trên audio liền mạch cho ra câu đúng ngữ pháp hơn.
 Không ai nói tiếp thì vẫn dịch nguyên câu dở: người ta có quyền bỏ lửng câu.
 
+Cửa sổ chờ đo bằng **đồng hồ audio**, không phải đồng hồ thật, và neo vào chỗ
+đoạn audio kết thúc. Đo bằng đồng hồ thật thì hỏng ở đúng chế độ dừng-từng-câu:
+client dừng file ngay tại endpoint nên trong lúc chờ không có audio nào chạy,
+cửa sổ tự hết giờ trước khi đoạn nói tiếp kịp tới. Ngoài ra không bỏ chờ khi
+VAD đang thu tiếng nói, cũng không bỏ khi đoạn nói tiếp đã chốt endpoint và
+đang xếp hàng — cả ba đều đã đo thấy làm câu bị cắt đôi.
+
 Đo A/B trên file 6 câu trọn: bật hay tắt đều ~6.0s, chênh lệch nằm trong nhiễu
 — tính năng không cộng gì vào câu bình thường.
 
