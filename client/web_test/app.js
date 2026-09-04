@@ -33,7 +33,10 @@ const state = {
   running: false,
   pendingBinary: null,      // metadata của tts_audio_chunk đang chờ frame nhị phân
   playHead: 0,              // mốc lịch phát tiếp theo trong playCtx
-  sources: new Set(),       // AudioBufferSourceNode đang phát — để dừng tức thì
+  sources: new Set(),       // AudioBufferSourceNode của TTS — để dừng tức thì
+  fileSources: new Set(),   // ... của file đang phát. Tách riêng khỏi TTS:
+                            // hủy TTS không được làm câm file, và dừng file
+                            // không được cắt lời đang đọc dở.
   endpointAt: null,         // mốc client thấy stt_final -> xấp xỉ VAD endpoint
   firstUseful: null,
   e2eSamples: [],
@@ -193,6 +196,38 @@ function stopPlayback() {
   state.playHead = 0;
 }
 
+/* --------------------------- phát tiếng file -------------------------- */
+
+function ensurePlayCtx() {
+  if (!state.playCtx) state.playCtx = new AudioContext();
+  return state.playCtx;
+}
+
+/** Lên lịch phát một chunk file tại đúng mốc `at` trong đồng hồ AudioContext.
+ *
+ * File PHẢI phát ra loa: người dùng cần nghe câu gốc lúc nó chạy tới, rồi mới
+ * tới bản dịch. Trước đây playbackLoop chỉ GỬI PCM lên server, không phát gì
+ * cả — câu gốc chỉ nghe được ở bước phát lại.
+ */
+function scheduleFileChunk(chunk, at) {
+  const ctx = ensurePlayCtx();
+  const buffer = ctx.createBuffer(1, chunk.length, TARGET_SR);
+  buffer.getChannelData(0).set(chunk);
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ctx.destination);
+  source.start(at);
+  state.fileSources.add(source);
+  source.onended = () => state.fileSources.delete(source);
+}
+
+function stopFileAudio() {
+  for (const source of state.fileSources) {
+    try { source.stop(); } catch { /* đã dừng rồi */ }
+  }
+  state.fileSources.clear();
+}
+
 /* ---------------------------- xử lý sự kiện --------------------------- */
 
 function onEvent(event) {
@@ -213,6 +248,13 @@ function onEvent(event) {
     case "stt_partial":
       ui.partial.textContent = data.text;
       ui.utteranceId.textContent = uttId;
+      break;
+
+    case "utterance_endpoint":
+      // VAD vừa chốt câu -> dừng file NGAY tại đây. Đợi `stt_final` thì đã
+      // phát lấn sang câu sau ~1.9s (thời gian Whisper nghe).
+      beginUtteranceHold();
+      log(type, `${data.trigger} · ${data.duration_s}s`);
       break;
 
     case "stt_final": {
@@ -241,7 +283,6 @@ function onEvent(event) {
         direction: data.direction || "to_user",
         translation: "",
       };
-      beginUtteranceHold();
       updateFileUi();
       break;
     }
@@ -256,7 +297,6 @@ function onEvent(event) {
       if (state.utt) state.utt.translation = data.full;
       markUseful();
       break;
-
 
 
     case "copilot_done":
@@ -386,6 +426,7 @@ function stop() {
   ui.toggle.textContent = "Bắt đầu nghe";
   ui.stopTts.disabled = true;
   stopPlayback();
+  stopFileAudio();
   state.node?.disconnect();
   state.stream?.getTracks().forEach((t) => t.stop());
   state.audioCtx?.close();
@@ -438,6 +479,9 @@ function pausePlayback(reason) {
   if (!f || f.paused || f.finished) return;
   f.paused = true;
   f.heldReason = reason || "";
+  // Cắt luôn phần đã lên lịch trước, nếu không loa còn kêu thêm ~0.2s sau khi
+  // đã "dừng" — chồng lên đầu bản dịch sắp đọc.
+  stopFileAudio();
   updateFileUi();
 }
 
@@ -496,30 +540,6 @@ function resetSteps() {
   for (const li of ui.reviewSteps.children) li.classList.remove("active", "done", "skip");
 }
 
-function playOriginal(startS, durationS) {
-  const f = state.file;
-  if (!f?.pcm || durationS <= 0) return Promise.resolve();
-
-  const from = Math.max(0, Math.floor(startS * TARGET_SR));
-  const to = Math.min(f.pcm.length, Math.ceil((startS + durationS) * TARGET_SR));
-  if (to <= from) return Promise.resolve();
-
-  if (!state.playCtx) state.playCtx = new AudioContext();
-  const ctx = state.playCtx;
-  const slice = f.pcm.subarray(from, to);
-  const buffer = ctx.createBuffer(1, slice.length, TARGET_SR);
-  buffer.getChannelData(0).set(slice);
-
-  const source = ctx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(ctx.destination);
-  state.sources.add(source);
-
-  return new Promise((resolve) => {
-    source.onended = () => { state.sources.delete(source); resolve(); };
-    source.start();
-  });
-}
 
 function speakAndWait(text, field) {
   if (!text?.trim() || state.ws?.readyState !== WebSocket.OPEN) return Promise.resolve();
@@ -539,11 +559,8 @@ async function runReview(utt) {
   ui.reviewSteps.hidden = false;
 
   try {
-    markStep("original", "active");
-    ui.fileState.textContent = "nghe lại: âm thanh gốc";
-    await playOriginal(utt.startS, utt.durationS);
-    markStep("original", "done");
-
+    // KHÔNG phát lại âm thanh gốc: file đã phát tới hết câu này rồi mới dừng,
+    // nghe lại là thừa. Dừng ở đâu thì đọc bản dịch ngay ở đó.
     if (state.review !== utt) return;
     const outbound = utt.direction === "to_counterpart";
     const canSpeak = state.ttsEnabled && utt.translation;
@@ -559,7 +576,7 @@ async function runReview(utt) {
   } finally {
     if (state.review === utt) {
       state.review = null;
-      ui.fileState.textContent = "nghe lại xong";
+      ui.fileState.textContent = "đọc xong — phát tiếp";
       setTimeout(resumePlayback, 300);
     }
   }
@@ -574,11 +591,10 @@ function maybeStartReview() {
 
 function beginUtteranceHold() {
   if (!state.file || !ui.autoPause.checked) return;
-  // Dừng ngay khi server chốt được một câu, để câu sau không chồng lên.
-  // Utterance mới sẽ hủy utterance đang chạy ở backend — đó chính là cái
-  // "loạn" mà chế độ này tránh. Chuỗi nghe lại (runReview) chịu trách nhiệm
-  // phát tiếp khi đã nghe xong cả bốn bước.
-  pausePlayback("đang chờ nghe lại câu này");
+  // Dừng đúng chỗ câu vừa dứt, rồi mới đọc bản dịch của chính câu đó. Không
+  // để file chạy tiếp trong lúc đang đọc: nghe hai câu chồng nhau thì loạn.
+  // runReview() chịu trách nhiệm phát tiếp sau khi đọc xong.
+  pausePlayback("đang chờ bản dịch câu này");
 }
 
 async function streamFile(file) {
@@ -635,21 +651,35 @@ async function streamFile(file) {
 
 async function playbackLoop() {
   const f = state.file;
+  const ctx = ensurePlayCtx();
+  const chunkS = CHUNK_MS / 1000;
+  // Lên lịch trước ngần này để tiếng không bị vấp, nhưng đủ nhỏ để lúc dừng
+  // ở cuối câu thì loa im gần như tức thì.
+  const LEAD_S = 0.2;
+  f.head = ctx.currentTime + 0.15;
+
   while (f === state.file && f.index < f.chunks.length) {
     if (f.paused) {
       // Chờ tới khi được tiếp tục. Không bận rộn quay vòng.
       await new Promise((resolve) => { f.wake = resolve; });
+      // Phát tiếp từ bây giờ, không phải từ mốc lịch cũ đã trôi qua.
+      f.head = ctx.currentTime + 0.15;
       continue;
     }
     if (!state.running || state.ws?.readyState !== WebSocket.OPEN) return;
 
-    state.ws.send(floatToPcm16(f.chunks[f.index]));
+    const chunk = f.chunks[f.index];
+    state.ws.send(floatToPcm16(chunk));
+    scheduleFileChunk(chunk, f.head);   // nghe được đúng đoạn vừa gửi
+    f.head += chunkS;
     f.index += 1;
     if (f.index % 5 === 0 || f.index === f.chunks.length) updateFileUi();
 
-    // Gửi đúng nhịp thời gian thực. Gửi dồn một lần sẽ không phản ánh đúng
-    // hành vi realtime của VAD và của backpressure.
-    await new Promise((r) => setTimeout(r, CHUNK_MS));
+    // Nhịp lấy theo ĐỒNG HỒ AUDIO, không phải setTimeout: setTimeout trôi vài
+    // phần trăm mỗi nhịp, sau 20 giây là lệch cả giây giữa cái nghe được và
+    // cái đã gửi lên server — đúng thứ khiến "dừng ở cuối câu" dừng sai chỗ.
+    const wait = (f.head - ctx.currentTime - LEAD_S) * 1000;
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   }
   if (f === state.file) {
     f.finished = true;
