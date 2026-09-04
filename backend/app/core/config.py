@@ -123,6 +123,11 @@ class SttConfig:
     vad_filter: bool = False  # VAD đã làm ở tầng audio/, không làm lại trong Whisper
     partial_beam_size: int = 1
     condition_on_previous_text: bool = False
+    # Số luồng CPU cho CTranslate2. 0 = để thư viện tự chọn.
+    # Đo trên Mac 10 nhân, model small: mặc định 2093ms/câu, 4 luồng 2045ms,
+    # 8 luồng 1704ms, 10 luồng 1803ms (10 thì tranh nhân với llama-server).
+    # Trên CUDA thì tham số này không dùng tới.
+    cpu_threads: int = 0
 
 
 @dataclass
@@ -243,6 +248,10 @@ class SessionConfig:
     #: Tiếng đối phương, dùng làm mặc định cho tới khi nghe họ nói lần đầu —
     #: sau đó lấy theo ngôn ngữ thật nghe được.
     counterpart_language: str = "en"
+    #: Số câu tối đa được xếp hàng chờ xử lý. Vượt quá thì bỏ câu CŨ NHẤT,
+    #: vì lúc đó bản dịch của nó đã lỗi thời so với cuộc nói chuyện. Việc bỏ
+    #: luôn được báo ra client, không im lặng.
+    max_pending_utterances: int = 3
     max_concurrent_sessions: int = 1
     idle_timeout_s: float = 180.0  # §8 Giai đoạn 4 — giải phóng VRAM sau 3 phút
     # Backpressure (F5): số chunk audio tối đa xếp hàng trước khi cảnh báo/drop.

@@ -6,6 +6,7 @@ không bao giờ thấy JSON thô của LLM.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import sys
@@ -18,7 +19,9 @@ from fastapi.testclient import TestClient
 from app.ai.llm import CHATML, build_prompt
 from app.ai.stt import Transcript
 from app.api.websocket import router
+from app.audio.chunker import AudioSegment, SegmentKind
 from app.core.config import load_config
+from app.protocol.events import EventType
 from tests.synth import SR, silence, speech
 
 LLM_OUTPUT = json.dumps(
@@ -32,12 +35,16 @@ LLM_OUTPUT_EN = json.dumps(
 class FakeStt:
     """STT giả lập. `language`/`text` đổi được để mô phỏng cả hai chiều."""
 
-    def __init__(self, language: str = "en", text: str | None = None):
+    def __init__(self, language: str = "en", text: str | None = None, delay_s: float = 0.0):
         self.calls = []
         self.language = language
         self.text = text or "I think we should table this for now."
+        #: Giả lập STT chậm — cần để dựng lại cảnh hàng đợi bị dồn.
+        self.delay_s = delay_s
 
     async def transcribe(self, pcm, *, is_final=True):
+        if self.delay_s:
+            await asyncio.sleep(self.delay_s)
         self.calls.append(("final" if is_final else "partial", pcm.size))
         return Transcript(
             text=self.text,
@@ -810,3 +817,137 @@ def test_tts_bo_qua_mau_khong_co_chu(tts_client):
     source = inspect.getsource(CopilotSession._speak_translation)
     assert "isalnum" in source, "không có rào chắn cho mẩu rỗng nghĩa"
     assert "clean_value" in source
+
+
+def test_ba_cau_lien_tiep_deu_duoc_dich_khong_cau_nao_bi_bo(client):
+    """Câu sau KHÔNG được vứt câu trước đang xử lý dở.
+
+    Trước đây `_start_pipeline` hủy thẳng pipeline của câu cũ khi câu mới tới.
+    Khi các câu nối nhau sát hơn thời gian xử lý một câu, câu cũ biến mất mà
+    log vẫn sạch. Đo thật với Whisper `small`: file ba câu chỉ ra bản dịch của
+    câu CUỐI, hai câu đầu có transcript rồi mất hút.
+
+    Mất một câu nghĩa là người dùng không bao giờ biết đối phương vừa nói gì —
+    tệ hơn hẳn so với nhận bản dịch chậm một nhịp.
+    """
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        payload = utterance_stream()
+        # Gửi liên tiếp ba câu, KHÔNG chờ câu trước xong.
+        for _ in range(3):
+            for i in range(0, len(payload), 3200):
+                ws.send_bytes(payload[i : i + 3200])
+        events = []
+        done = 0
+        for _ in range(1200):
+            message = ws.receive()
+            if "text" not in message or message["text"] is None:
+                continue
+            event = json.loads(message["text"])
+            events.append(event)
+            if event["type"] == "copilot_done":
+                done += 1
+                if done == 3:
+                    break
+
+    finals = {e["utterance_id"] for e in events if e["type"] == "stt_final"}
+    dones = {e["utterance_id"] for e in events if e["type"] == "copilot_done"}
+    dropped = [e for e in events if e["type"] == "utterance_dropped"]
+    assert not dropped, f"không được bỏ câu nào ở nhịp này: {dropped}"
+    assert finals == dones, (
+        f"có câu nghe được mà không dịch: nghe {sorted(finals)}, dịch {sorted(dones)}"
+    )
+    assert len(dones) == 3
+
+
+def test_bo_cau_cu_nhat_khi_tut_lai_qua_xa_va_bao_ra_client(client):
+    """Tụt quá xa thì bỏ câu CŨ NHẤT, và phải BÁO chứ không im lặng.
+
+    Kiểm thẳng chính sách xếp hàng thay vì chạy e2e — dựng cảnh "xử lý không
+    kịp" bằng cách đua với đồng hồ thì test sẽ chập chờn.
+    """
+    from app.api.websocket import CopilotSession
+
+    config = client.app.state.config
+    config.session.max_pending_utterances = 2
+    session = CopilotSession(
+        websocket=None, runtime=client.app.state.runtime, config=config,
+        session_id="sess_test",
+    )
+
+    async def scenario():
+        # Worker KHÔNG chạy -> hàng đợi chỉ dồn lên, đúng cảnh "xử lý không kịp".
+        segment = AudioSegment(
+            kind=SegmentKind.FINAL, pcm=np.zeros(SR, dtype=np.float32),
+            sample_rate=SR, start_s=0.0, duration_s=1.0, trigger="test",
+        )
+        for _ in range(5):
+            await session._start_pipeline(segment)
+        queued = [session._pipeline_queue.get_nowait().utterance_id
+                  for _ in range(session._pipeline_queue.qsize())]
+        events = []
+        while not session.bus._queue.empty():
+            events.append(session.bus._queue.get_nowait())
+        return queued, events
+
+    remaining, events = asyncio.run(scenario())
+    # Giữ lại các câu MỚI NHẤT: câu cũ đã lỗi thời so với cuộc nói chuyện.
+    assert remaining == ["utt_004", "utt_005"], remaining
+    dropped = [e for e in events if e.type == EventType.UTTERANCE_DROPPED]
+    assert [e.utterance_id for e in dropped] == ["utt_001", "utt_002", "utt_003"], (
+        "bỏ câu mà không báo ra client là lỗi im lặng"
+    )
+    assert all(e.data["reason"] == "backlog" for e in dropped)
+
+
+def test_reset_khong_giet_worker_pipeline(client):
+    """Sau `reset`, câu tiếp theo vẫn phải được xử lý.
+
+    `reset` từng gọi thẳng `_cancel_all_work()` — hàm dọn dẹp lúc đóng session
+    — nên nó hủy luôn worker pipeline vĩnh viễn. Từ đó trở đi mọi câu đều rơi
+    vào hàng đợi không ai đọc, và client treo chờ mãi.
+    """
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        send_utterance(ws)
+        ws.send_text(json.dumps({"action": "reset"}))
+        events = send_utterance(ws)
+    assert any(e["type"] == "copilot_done" for e in events), (
+        "sau reset không còn câu nào được xử lý — worker pipeline đã chết"
+    )
+
+
+def test_moi_cau_deu_duoc_doc_thanh_tieng(tts_client):
+    """Câu sau không được làm câu trước mất phần đọc.
+
+    `begin_utterance` từng đánh dấu câu trước là CANCELLED, nên worker TTS bỏ
+    qua mọi mẩu của nó. Đo thật: file 6 câu ra đủ 6 bản dịch trên màn hình
+    nhưng chỉ HAI câu cuối được đọc. Đây là tai nghe phiên dịch — không nghe
+    được nghĩa là mất hẳn câu đó.
+    """
+    # STT chậm -> câu 2 mở ra trong lúc câu 1 còn đang dịch/đọc dở. Đây chính
+    # là nhịp thật đã làm mất phần đọc của bốn câu đầu trong file 6 câu.
+    tts_client.app.state.runtime.stt.delay_s = 0.15
+    with tts_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        payload = utterance_stream()
+        for _ in range(3):
+            for i in range(0, len(payload), 3200):
+                ws.send_bytes(payload[i : i + 3200])
+        events = []
+        done = 0
+        for _ in range(4000):
+            message = ws.receive()
+            if "text" not in message or message["text"] is None:
+                continue
+            event = json.loads(message["text"])
+            events.append(event)
+            if event["type"] == "tts_done":
+                done += 1
+                if done == 3:
+                    break
+
+    heard = {e["utterance_id"] for e in events if e["type"] == "stt_final"}
+    spoken = {e["utterance_id"] for e in events if e["type"] == "tts_started"}
+    assert len(heard) == 3, f"phải nghe được cả ba câu, mới có {sorted(heard)}"
+    assert spoken == heard, f"nghe được mà không đọc: {sorted(heard - spoken)}"

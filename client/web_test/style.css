@@ -28,6 +28,7 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 .badge { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); }
 .badge.off { color: var(--dim); }
 .badge.on  { color: var(--ok); border-color: var(--ok); }
+.badge.warn { color: var(--warn); border-color: var(--warn); }
 .badge.err { color: var(--err); border-color: var(--err); }
 main {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
