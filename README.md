@@ -230,78 +230,67 @@ ngắn như "Yes.", "Ừ."), hệ thống giữ chiều của lượt trước t
 Trường `intent` (§4.4) và `replies` đều đã gỡ. Output LLM còn đúng **một
 trường** `translation`, từ ~110 token xuống ~20.
 
-### Model LLM: Qwen3.5-2B Q8_0
+### Model LLM: Qwen3.5-4B Q4_K_M
 
-Đặc tả v4.1.0 chọn Qwen2.5-3B. Đã thử ba model trên **chính prompt của dự án**,
-hội thoại 8 lượt xen kẽ hai chiều:
+Đo ở `temperature 0` (greedy, tái lập được) trên 12 câu / 35 yếu tố bắt buộc:
 
-| | Qwen3.5-2B Q8_0 | Gemma 3 4B Q4_K_M | Qwen2.5-3B Q4_K_M |
-|---|---|---|---|
-| File | **1.9 GB** | 2.3 GB | 2.0 GB |
-| RSS khi nạp | **2119 MB** | 2617 MB | 1994 MB |
-| Sai ngôn ngữ | 0/8 | 0/8 | 0/8 |
-| Rác trong bản dịch | **0/8** | **0/8** | 2/8 (rò tiếng Trung) |
-| TTFT P50 | 441ms | **320ms** | 225ms |
-| Tổng sinh P50 | **956ms** | 1018ms | 699ms |
+| | Yếu tố giữ được | Câu thiếu ý | Đảo nghĩa | Thiếu tiểu từ | Tổng sinh | RSS |
+|---|---|---|---|---|---|---|
+| Qwen3.5-2B Q8_0 | 33/35 (94%) | 2 | **1** | 3/3 | **938ms** | **2042 MB** |
+| Qwen3.5-4B Q4_K_M | **35/35 (100%)** | **0** | **0** | 3/3 | 2039ms | 2830 MB |
+| **4B + chỉ dẫn văn phong** | 34/35 (97%) | 1 | **0** | **2/3** | 3086ms | 2830 MB |
 
-Qwen2.5-3B loại vì rò tiếng Trung vào bản dịch tiếng Việt
-(`"Họ đang考虑推迟发布到下一季度。"`) — lỗi này đã lặp lại ở mọi lần đo.
+Bản 2B dịch thiếu ý và **đảo nghĩa** — `"anh chốt giúp em phạm vi"` thành
+`"you'll help me set the scope"` (biến lời nhờ thành lời khẳng định). 4B hết
+hẳn lỗi đó.
 
-Giữa hai model còn lại, **chất lượng dịch sau khi sửa prompt là ngang nhau** —
-cả hai đều còn lỗi lẻ tẻ, chỉ khác loại. Lý do chọn Qwen3.5-2B là **bộ nhớ**:
+Chỉ dẫn văn phong đổi 1 điểm trung thực lấy độ mượt:
 
-| | Ước tính tổng VRAM | Dự phòng dưới trần 5.5GB |
+| | 4B trần | 4B + văn phong |
 |---|---|---|
-| Qwen3.5-2B Q8_0 | 5.17 GB | **0.33 GB** |
-| Gemma 3 4B Q4_K_M | 5.50 GB | **0** |
+| *"We're thinking about pushing the launch…"* | Chúng ta đang nghĩ **về việc đẩy ra thời gian phát hành** sang quý tới. | **Bên mình đang tính** đẩy việc ra mắt sang quý sau. |
+| *"Does that work?"* | **Việc đó** có được không? | **Vậy** được không? |
+| *"even if we're late"* | **ngay cả khi** chúng ta trễ | **dù** chúng ta có muộn đi nữa |
 
-(Whisper small ~1.8GB + LLM + KV ~0.5GB + CUDA overhead ~0.8GB, theo §3.1.)
+> **Cảnh báo cho build CUDA.** 4B nặng 2830 MB. Cộng Whisper `small` (~1.8GB)
+> + KV (~0.5GB) + CUDA overhead (~0.8GB) = **~5.9GB, vượt trần 5.5GB** của
+> §3.1. Muốn chạy 4B trên GPU 6GB thì phải hạ `whisper_model` xuống `base`
+> (~1.0GB), khi đó tổng còn ~5.1GB. Hoặc giữ 2B, đổi lại chấp nhận lỗi đảo
+> nghĩa. Đây là quyết định phần cứng, `benchmarks/b4_vram.py` sẽ cho số thật.
 
-Gemma đẩy build CUDA lên đúng mép trần. Qwen3.5-2B trả lại ~500 MB — và làm
-được điều đó **ở lượng tử hóa Q8_0**, gần như không mất chất lượng, trong khi
-Gemma đã là Q4. Với model 2B, Q4 làm hụt chất lượng dịch rõ hơn hẳn so với
-model lớn, nên Q8 là lựa chọn đúng chứ không phải xa xỉ.
+Đổi model là một dòng trong `config.yaml`; template tự nhận diện theo tên file.
 
-Đổi model là **một dòng** trong `config.yaml` — prompt template tự nhận diện
-theo tên file GGUF. Chạy lại phép so sánh bất cứ lúc nào:
+### temperature 0, và vì sao điều đó quan trọng
+
+Ở `temperature 0.1`, chạy **cùng một cấu hình** ba lần cho ra 80%, 83%, 86%.
+Nghĩa là mọi so sánh A/B trong khoảng đó đều nằm trong nhiễu. Tôi đã báo cáo
+vài "cải thiện" trước khi phát hiện điều này — chúng không có thật.
+
+Ở `temperature 0` (greedy), hai lần chạy cùng cấu hình cho kết quả **giống hệt**.
+Dịch thuật không phải việc cần sáng tạo, nên đây vừa đúng cho sản phẩm vừa là
+điều kiện để đo được.
+
+### Bộ đo chất lượng dịch
 
 ```bash
-python -m benchmarks.compare_models \
-    --model models/qwen3.5-2b-q8_0.gguf \
-    --model models/gemma-3-4b-it-q4_k_m.gguf
+python -m benchmarks.fidelity
+python -m benchmarks.fidelity --model models/qwen3.5-2b-q8_0.gguf
 ```
 
-Công cụ đo được `sai ngôn ngữ` và `rác`; còn **có tự nhiên không thì phải tự
-đọc** — chỉ người nói tiếng đó mới phán được, nên nó in đủ output ra.
+Đo ba thứ khác nhau, vì chúng bắt ba loại lỗi khác nhau:
 
-#### Prompt quan trọng ngang model
-
-Ba lần sửa prompt cải thiện **cả hai model** nhiều hơn là đổi model:
-
-| Sửa | Trước | Sau |
+| | Bắt lỗi gì | Ví dụ thật |
 |---|---|---|
-| Nói rõ giữ nguyên vai | *"anh chốt giúp em"* → "**I'll help you**" (đảo vai) | "can you finalize... **for me**" |
-| Đọc đúng mốc thời gian | *"by three"* → "vào **ngày ba**" | "vào **ba giờ**" |
-| Tách bạch lịch sử khỏi câu hiện tại | model 2B **dịch nhầm lượt trước** | dịch đúng câu đang hỏi |
+| `must_keep` | **Bỏ sót** | *"pushing the launch"* → *"đẩy ra"* (mất "launch") |
+| `forbid` | **Đảo nghĩa** | *"probably won't"* → *"**chắc chắn** là sẽ không"* |
+| `STIFF_WORDS` / `PARTICLES` | **Khô khan** | không một tiểu từ nào trong cả 3 câu đời thường |
 
-Cái thứ ba là bài học: khối lịch sử và câu cần dịch nằm cùng một lượt user, và
-với model càng nhỏ thì ranh giới mờ càng dễ làm nó lạc. Giờ có `=== CONTEXT
-ONLY — DO NOT TRANSLATE ===` và `TRANSLATE EXACTLY THIS ONE LINE`.
+`forbid` cần thiết vì kiểm tra "có chứa chuỗi" một mình không đủ: `"chắc chắn"`
+chứa `"chắc"` nên nó **đạt** bài kiểm tra cho `"probably"` — trong khi nghĩa
+thì ngược lại.
 
-#### Ba họ template, chọn theo tên file
-
-| | ChatML | Gemma | Qwen3 |
-|---|---|---|---|
-| Vai `system` riêng | có | **không** (gộp vào lượt user) | có |
-| Stop token | `<\|im_end\|>` | `<end_of_turn>` | `<\|im_end\|>` |
-| Đặc biệt | | | điền sẵn `<think></think>` rỗng |
-
-Qwen3/3.5 có chế độ *thinking*. Chat template chính thức tắt nó bằng cách điền
-sẵn một khối `<think>\n\n</think>\n\n` rỗng đầu lượt assistant — không điền
-thì model suy nghĩ dài dòng, mà với dịch câu ngắn đó là latency thuần túy.
-
-`--swa-full` chỉ cần cho Gemma (sliding-window attention); với Qwen nó là
-no-op, giữ bật để đổi model không phải nhớ đổi cờ.
+Còn "nghe có tự nhiên không" thì máy chỉ gợi ý được; phán quyết cuối vẫn phải
+là người nói tiếng đó, nên công cụ in đủ output ra.
 
 ### Ngưỡng chốt câu: 900ms, không phải 400ms
 
@@ -326,45 +315,6 @@ khoảng đó ngắn bất thường trong hội thoại thật.
 
 Đánh đổi: **+500ms vào E2E** mỗi câu. Chỉnh bằng `vad.min_silence_ms`.
 
-### Độ trung thực của bản dịch
-
-`benchmarks/fidelity.py` đo được thứ mà "nghe có tự nhiên không" thì không: mỗi
-câu thử đi kèm danh sách yếu tố **bắt buộc phải còn** — con số, phủ định, từ
-giảm nhẹ, tên riêng, mốc giờ.
-
-```bash
-python -m benchmarks.fidelity
-```
-
-Ba thay đổi, đo trên 12 câu / 35 yếu tố:
-
-| | Yếu tố giữ được | Câu thiếu ý |
-|---|---|---|
-| Prompt ưu tiên "tự nhiên, không word-for-word" | 28/35 (80%) | 5/12 |
-| Prompt ưu tiên **trung thực**, temp 0.1, chống chép | **31/35 (89%)** | **4/12** |
-
-Prompt cũ nói *"Natural spoken Vietnamese, **not word-for-word**"* — chính câu
-đó cho phép model lược bớt. Giờ độ chính xác là quy tắc số 1 và "nghe tự nhiên"
-là quy tắc số 6, trong ràng buộc của 5 quy tắc trên.
-
-#### Lưới an toàn: dịch lại khi phát hiện hỏng
-
-Model 2B thỉnh thoảng **chép nguyên văn** thay vì dịch — tái hiện được, không
-phụ thuộc temperature hay grammar:
-
-```
-nguồn     Chị cho em hỏi thêm một chút về giá.
-bản dịch  Chị cho em hỏi thêm một chút về giá.
-```
-
-Người dùng nghe câu tiếng Việt của chính mình đọc bằng giọng Anh thì vô dụng.
-`ai/verify.py` phát hiện (chép nguyên văn / sai ngôn ngữ / rỗng) và dịch lại
-**một lần** với lời nhắc cứng hơn. Chỉ một lần: lần hai còn hỏng thì lần ba
-cũng thế. Tắt bằng `llm.retry_on_bad_translation`.
-
-Phát hiện cố ý **hẹp** — dịch lại tốn ~1 giây và làm bản dịch nhấp nháy, nên
-báo động giả đắt hơn bỏ sót. Dấu hiệu "vắng dấu tiếng Việt" chỉ tin theo một
-chiều, vì câu tiếng Việt ngắn có thể không dấu ("Ok", "Vâng").
 
 ### Bộ nhớ hội thoại
 

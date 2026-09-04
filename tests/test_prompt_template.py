@@ -152,8 +152,11 @@ def test_chieu_nguoc_theo_dung_tieng_doi_phuong_that():
 def test_prompt_danh_dau_ai_dang_noi():
     to_user = build_prompt("Hello.", "en", GEMMA, direction=Direction.TO_USER)
     to_them = build_prompt("Xin chào.", "vi", GEMMA, direction=Direction.TO_COUNTERPART)
-    assert "Them said:" in to_user
-    assert "You said:" in to_them
+    # Câu cần dịch KHÔNG được gắn nhãn người nói: chiều dịch đã nói rõ ai
+    # đang nói, và model 4B dịch luôn cả nhãn ("Họ nói: Đừng gửi nó...").
+    assert "Them said:" not in to_user
+    assert "You said:" not in to_them
+    assert "Hello." in to_user and "Xin chào." in to_them
     # ranh giới phải rõ, model 2B từng dịch nhầm một dòng trong lịch sử
     assert "TRANSLATE EXACTLY THIS ONE LINE" in to_user
 
@@ -169,7 +172,7 @@ def test_lich_su_nam_trong_system_prompt_de_giu_prefix_cache():
         direction=Direction.TO_USER,
         history='Them: "Chúng ta nên hoãn lại."',
     )
-    assert prompt.index("Chúng ta nên hoãn lại") < prompt.index("Them said:")
+    assert prompt.index("Chúng ta nên hoãn lại") < prompt.index("TRANSLATE EXACTLY")
     assert "DO NOT TRANSLATE ANY LINE BELOW" in prompt
 
 
