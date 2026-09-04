@@ -164,12 +164,14 @@ python -m benchmarks.run_gate --skip-interactive   # bỏ B7/B9/B10
 python -m benchmarks.b5_concurrent_e2e -n 30       # chạy riêng
 ```
 
-So sánh hai model LLM trên chính prompt của dự án:
+So sánh hai model LLM trên chính prompt của dự án. Dự án chỉ giữ MỘT model
+(Qwen3.5-4B, xem `models/README.md`), nên muốn dùng công cụ này thì phải tải
+thêm model để đối chiếu — nó nhận đường dẫn bất kỳ:
 
 ```bash
 python -m benchmarks.compare_models \
-    --model models/gemma-3-4b-it-q4_k_m.gguf \
-    --model models/qwen2.5-3b-instruct-q4_k_m.gguf
+    --model models/qwen3.5-4b-q4_k_m.gguf \
+    --model <đường-dẫn-gguf-khác>
 ```
 
 > Trên macOS, `run_gate` in cảnh báo đậm: đặc tả yêu cầu chốt Gate trên GPU

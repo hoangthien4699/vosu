@@ -65,7 +65,9 @@ llm:
   # nằm trong nhiễu.
   temperature: 0.0
   n_gpu_layers: null             # null = lấy từ device profile (CUDA 36, Metal 99)
-  # auto | chatml | gemma — "auto" suy từ tên file GGUF.
+  # auto | chatml | gemma | qwen3 — "auto" suy từ tên file GGUF.
+  # Dự án chỉ dùng Qwen3.5-4B (-> qwen3). Các template khác giữ lại để "auto"
+  # vẫn chọn đúng nếu ai đó trỏ config sang model khác.
   # Dùng sai template thì model vẫn sinh chữ, chỉ là chất lượng tệ đi khó
   # truy vết; không có lỗi nào được ném ra.
   prompt_template: auto

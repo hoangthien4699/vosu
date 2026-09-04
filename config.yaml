@@ -31,9 +31,13 @@ paths:
   # tố giữ lại so với 94%, và 0 câu đảo nghĩa. Đổi lại chậm hơn ~2-3 lần và
   # nặng thêm ~790MB.
   #
+  # Model DUY NHẤT của dự án — đã bỏ hẳn Qwen3.5-2B, Gemma 3 4B và Qwen2.5-3B
+  # để ưu tiên chất lượng dịch. Xem models/README.md.
+  #
   # CẢNH BÁO CHO BUILD CUDA: RSS 2830MB. Cộng Whisper `small` (~1.8GB) + KV
   # (~0.5GB) + CUDA overhead (~0.8GB) = ~5.9GB, VƯỢT trần 5.5GB của §3.1.
-  # Muốn dùng 4B trên GPU 6GB thì phải hạ `whisper_model` xuống `base`.
+  # Trước có hai đường lui — hạ Whisper xuống `base`, hoặc quay về 2B — nay bỏ
+  # cả hai vì đều đánh đổi bằng chất lượng. Nghĩa là build CUDA cần card 8GB.
   llm_gguf: models/qwen3.5-4b-q4_k_m.gguf
   # brew install llama.cpp, rồi scripts/download_models.sh tự liên kết vào đây
   llama_server_bin: models/llama-server

@@ -7,8 +7,7 @@ Chạy `scripts/download_models.sh` để tải đủ. Sau khi xong, cấu trúc
 ```
 models/
 ├── llama-server                              # binary llama.cpp (tự build hoặc brew)
-├── gemma-3-4b-it-q4_k_m.gguf                 # ~2.3 GB  <- model đang dùng
-├── qwen2.5-3b-instruct-q4_k_m.gguf           # ~2.0 GB  <- giữ để đối chiếu
+├── qwen3.5-4b-q4_k_m.gguf                    # ~2.5 GB  <- model duy nhất
 ├── silero_vad.onnx                           # ~2 MB
 └── piper/
     ├── vi_VN-vais1000-medium.onnx            # + .onnx.json
@@ -18,27 +17,43 @@ models/
 Model Faster-Whisper **không** nằm ở đây — thư viện tự tải về cache của
 HuggingFace (`~/.cache/huggingface`) theo tên trong `paths.whisper_model`.
 
-## Vì sao Whisper Small, không phải Medium
+## Vì sao chỉ một model
 
-§3.1 của đặc tả: bài toán là *"transcription đủ nhanh và đủ chính xác để LLM
-hiểu intent"*, không phải *"transcription chính xác tuyệt đối"* — hai mục tiêu
-tối ưu khác nhau. Chỉ nâng lên Medium nếu benchmark cho thấy Small thực sự
-không đủ.
+Dự án chốt **Qwen3.5-4B Q4_K_M** và không giữ model dự phòng nào. Ưu tiên là
+chất lượng dịch; các lựa chọn nhanh hơn đều đánh đổi bằng nghĩa:
 
-## Vì sao Qwen3.5-2B Q8_0
+| model | vì sao loại |
+|---|---|
+| Qwen2.5-3B Q4_K_M | model của đặc tả gốc — rò tiếng Trung vào bản dịch tiếng Việt |
+| Gemma 3 4B Q4_K_M | dịch kém hơn trên chính prompt của dự án |
+| Qwen3.5-2B Q8_0 | nhanh hơn ~1.7s mỗi câu, nhưng sai thành ngữ |
 
-Đã thử ba model trên chính prompt của dự án. Qwen2.5-3B (đặc tả gốc) loại vì rò
-tiếng Trung vào bản dịch tiếng Việt. Giữa Qwen3.5-2B và Gemma 3 4B, chất lượng
-dịch ngang nhau sau khi sửa prompt — chọn Qwen3.5-2B vì bộ nhớ:
+Ví dụ đo được với 2B: `"I think we should table this discussion"` ra
+*"đặt cuộc thảo luận"* (hiểu "table" là "đặt"), còn 4B ra *"tạm gác lại"*.
 
-| | RSS | Ước tính tổng VRAM | Dự phòng dưới trần 5.5GB |
-|---|---|---|---|
-| Qwen3.5-2B Q8_0 | 2119 MB | 5.17 GB | **0.33 GB** |
-| Gemma 3 4B Q4_K_M | 2617 MB | 5.50 GB | **0** |
+Muốn so lại về sau thì tải thêm model rồi chạy
+`python -m benchmarks.compare_models`; công cụ nhận đường dẫn bất kỳ.
 
-**Q8_0 chứ không phải Q4.** Model 2B nhỏ nên lượng tử hóa 4-bit làm hụt chất
-lượng dịch rõ hơn nhiều so với model lớn. Q8_0 gần như không mất gì, mà file
-vẫn nhẹ hơn một model 4B nén Q4.
+## Vì sao Whisper Small, không phải Base hay Medium
 
-Đổi model là một dòng trong `config.yaml` — prompt template tự nhận diện theo
-tên file. So sánh lại bằng `python -m benchmarks.compare_models`.
+Đo WER trên 20 câu Anh/Việt (`benchmarks/stt_wer.py`). `base` nghe nhầm kiểu
+"thanh toán" → "thang tòa án", "bàn giao" → "bàn dào", và càng ồn càng giãn:
+
+| SNR | base | small |
+|---|---|---|
+| sạch | 5.3% | 1.1% |
+| 20dB (phòng họp thường) | 9.1% | **1.1%** |
+| 10dB | 14.4% | 8.0% |
+| 5dB | 27.8% | 16.6% |
+
+Nghe sai một từ khoá rồi dịch sai hẳn nghĩa — tệ hơn nhiều so với chậm thêm
+một giây. Chưa nâng lên Medium: §3.1 đặt mục tiêu *"đủ nhanh và đủ chính xác
+để LLM hiểu intent"*, và Small chưa cho thấy là không đủ.
+
+## Hệ quả VRAM khi chỉ còn 4B
+
+Qwen3.5-4B (RSS ~2830 MB) + Whisper `small` (~1.8 GB) + KV (~0.5 GB) + CUDA
+overhead (~0.8 GB) ≈ **5.9 GB**, vượt trần 5.5 GB của §3.1. Trước đây có hai
+đường lui — hạ Whisper xuống `base`, hoặc quay về 2B — nay đã bỏ cả hai vì
+đều đánh đổi bằng chất lượng. Nghĩa là build CUDA cần card **8 GB**, không
+phải 6 GB. Chạy `benchmarks/b4_vram.py` để có số thật trên phần cứng NVIDIA.
