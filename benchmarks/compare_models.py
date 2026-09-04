@@ -1,8 +1,11 @@
 """So sánh chất lượng dịch giữa các model — công cụ, KHÔNG phải mục của Gate.
 
     python -m benchmarks.compare_models \\
-        --model models/gemma-3-4b-it-q4_k_m.gguf \\
-        --model models/qwen3-4b-instruct-2507-q4_k_m.gguf
+        --model models/qwen3.5-4b-q4_k_m.gguf \\
+        --model <đường-dẫn-gguf-khác>
+
+Dự án chỉ giữ MỘT model, nên muốn dùng công cụ này thì phải tải thêm model để
+đối chiếu. Công cụ nhận đường dẫn bất kỳ.
 
 Đo cả HAI chiều trên chính prompt của dự án. Mỗi model khởi động riêng, lần
 lượt, để không tranh chấp GPU/VRAM.

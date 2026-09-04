@@ -27,25 +27,16 @@ fetch "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/sil
       "$MODELS/silero_vad.onnx"
 
 echo
-echo "==> Qwen3.5-2B Instruct Q8_0 (~1.9 GB) — model đang dùng"
-# Q8_0 chứ không phải Q4: model 2B nhỏ nên lượng tử hóa 4-bit làm hụt chất
-# lượng dịch rõ hơn nhiều so với model lớn. Q8_0 gần như không mất gì, mà file
-# vẫn nhỏ hơn một model 4B nén Q4.
-fetch "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q8_0.gguf" \
-      "$MODELS/qwen3.5-2b-q8_0.gguf"
-
-# Các model đã đánh giá, giữ lại để đối chiếu. Bỏ qua bằng VOSU_SKIP_ALT=1.
-if [[ "${VOSU_SKIP_ALT:-0}" != "1" ]]; then
-  echo
-  echo "==> Gemma 3 4B Q4_K_M (~2.3 GB, để đối chiếu)"
-  fetch "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" \
-        "$MODELS/gemma-3-4b-it-q4_k_m.gguf"
-
-  echo
-  echo "==> Qwen2.5-3B Q4_K_M (~2.0 GB, model gốc của đặc tả)"
-  fetch "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf" \
-        "$MODELS/qwen2.5-3b-instruct-q4_k_m.gguf"
-fi
+echo "==> Qwen3.5-4B Q4_K_M (~2.5 GB) — model duy nhất của dự án"
+# Chỉ dùng MỘT model. Đã thử và loại:
+#   Qwen2.5-3B (đặc tả gốc) — rò tiếng Trung vào bản dịch tiếng Việt.
+#   Gemma 3 4B             — dịch kém hơn trên chính prompt của dự án.
+#   Qwen3.5-2B Q8_0        — nhanh hơn 4B ~1.7s mỗi câu nhưng dịch sai thành
+#                            ngữ: "table this discussion" -> "đặt cuộc thảo
+#                            luận" (đúng phải là "tạm gác lại").
+# Ưu tiên chất lượng dịch, nên giữ 4B và chấp nhận chậm hơn.
+fetch "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf" \
+      "$MODELS/qwen3.5-4b-q4_k_m.gguf"
 
 echo
 echo "==> Giọng Piper (VI + EN)"

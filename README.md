@@ -1,7 +1,7 @@
 # vosu — AI Conversational Copilot
 
-> **Nhánh `release` — build NVIDIA/CUDA.** Xem [BUILD.md](BUILD.md).
-> Build macOS ở nhánh `release-mac`; phát triển ở `main`.
+> **Nhánh `release-mac` — build macOS (Apple Silicon).** Xem [BUILD.md](BUILD.md).
+> Không dùng nhánh này để chốt Benchmark Gate — build CUDA ở nhánh `release`.
 
 
 Trợ lý hội thoại thời gian thực chạy qua tai nghe: nghe người đối diện nói →
@@ -278,7 +278,7 @@ Dịch thuật không phải việc cần sáng tạo, nên đây vừa đúng c
 
 ```bash
 python -m benchmarks.fidelity
-python -m benchmarks.fidelity --model models/qwen3.5-2b-q8_0.gguf
+python -m benchmarks.fidelity --model <đường-dẫn-gguf-khác>   # muốn đối chiếu
 ```
 
 Đo ba thứ khác nhau, vì chúng bắt ba loại lỗi khác nhau:
