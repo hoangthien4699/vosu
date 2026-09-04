@@ -61,6 +61,29 @@ curl -s localhost:8000/health | python3 -m json.tool
 2. Chọn một file trong `benchmarks/audio/` (ví dụ `sample_03.wav`)
 3. Xem transcript → bản dịch → hàm ý → gợi ý trả lời hiện dần
 
+### Người đối diện nói nhanh: bản dịch vẫn được đọc trọn
+
+Barge-in (§2.4.1) **mặc định tắt** — sai lệch có chủ ý so với đặc tả. Nó được
+thiết kế cho tình huống *người dùng* nói đè lên bản đọc, nhưng vòng lặp chính
+của sản phẩm là *nghe đối phương*: với một mic thì tiếng nói mới thường là họ
+nói tiếp, không phải người dùng chen ngang.
+
+Đo thật trên `benchmarks/audio/noi_nhanh.wav` (6 câu, nghỉ 0.9s):
+
+```
+bật barge-in : 2/6 bản dịch bị cắt, một câu cắt khi chưa đọc được chữ nào
+tắt barge-in : 6/6 đọc trọn, nối tiếp đúng thứ tự, cách nhau ~200ms
+```
+
+Đổi lại phải chặn hàng đợi đọc phình vô hạn: đọc một câu mất ~2.5-3s, nếu
+người ta ra câu mới nhanh hơn thế thì phần đọc tụt lại mãi và cuối cùng nghe
+bản dịch của chuyện xảy ra một phút trước. Vượt `tts.max_pending_reads` thì bỏ
+bản **cũ nhất** (đã lạc hậu so với cuộc nói chuyện) và **báo ra client** —
+mất một câu trong im lặng còn tệ hơn chính việc mất câu.
+
+Bật lại `tts.barge_in` khi nguồn audio là mic của chính người dùng và bạn cần
+họ ngắt lời được. Benchmark B8 vẫn đo được bằng cờ đó.
+
 ### Nghe âm thanh đang phát trên máy
 
 Nút **"Nghe âm thanh máy…"** lấy audio của một tab/cửa sổ đang phát (YouTube,

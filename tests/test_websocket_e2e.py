@@ -1135,3 +1135,101 @@ def test_bus_da_dong_thi_khong_nhan_them_event():
     bus = asyncio.run(scenario())
     # Chỉ còn đúng sentinel, event sau khi đóng bị bỏ.
     assert bus._queue.qsize() == 1
+
+
+def test_khong_cat_loi_dang_doc_khi_doi_phuong_noi_tiep(tts_client):
+    """Bản dịch phải được đọc TRỌN, dù người đối diện đã nói câu tiếp theo.
+
+    Barge-in được thiết kế cho tình huống NGƯỜI DÙNG nói đè lên bản đọc. Nhưng
+    vòng lặp chính của sản phẩm là NGHE ĐỐI PHƯƠNG, và với một mic thì tiếng
+    nói mới thường là họ nói tiếp. Đo thật trên đoạn nói nhanh (nghỉ 0.9s):
+    2 trong 6 bản dịch bị cắt, một câu bị cắt khi chưa đọc được chữ nào.
+    """
+    assert tts_client.app.state.config.tts.barge_in is False, "mặc định phải TẮT"
+
+    with tts_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        payload = utterance_stream()
+        for _ in range(3):
+            for i in range(0, len(payload), 3200):
+                ws.send_bytes(payload[i : i + 3200])
+        events = []
+        done = 0
+        for _ in range(4000):
+            message = ws.receive()
+            if "text" not in message or message["text"] is None:
+                continue
+            events.append(json.loads(message["text"]))
+            if events[-1]["type"] == "tts_done":
+                done += 1
+                if done == 3:
+                    break
+
+    cut = [e for e in events if e["type"] == "tts_cancelled"
+           and e["data"]["reason"] == "barge_in"]
+    assert not cut, f"bản dịch bị cắt giữa chừng: {cut}"
+
+
+def test_chan_hang_doi_doc_phinh_vo_han(client):
+    """Nói nhanh hơn máy đọc thì phải bỏ bản CŨ NHẤT và BÁO ra.
+
+    Bỏ cắt lời rồi thì mọi bản dịch đều được đọc trọn — nhưng đọc một câu mất
+    ~2.5-3s, nếu người nói ra câu mới nhanh hơn thế thì phần đọc tụt lại mãi
+    và cuối cùng người dùng nghe bản dịch của chuyện xảy ra một phút trước.
+    """
+    from app.api.websocket import CopilotSession
+    from app.protocol.events import EventType
+
+    config = client.app.state.config
+    config.tts.max_pending_reads = 2
+    session = CopilotSession(
+        websocket=None, runtime=client.app.state.runtime, config=config,
+        session_id="sess_backlog",
+    )
+    session._tts_available = True
+    session.tts = object()          # chỉ cần khác None
+
+    async def scenario():
+        session._loop = asyncio.get_running_loop()
+        for i in range(5):
+            session._speak(f"utt_{i:03d}", f"bản dịch {i}", field="translation")
+        await asyncio.sleep(0)
+        queued = []
+        while not session._tts_queue.empty():
+            queued.append(session._tts_queue.get_nowait().utterance_id)
+        events = []
+        while not session.bus._queue.empty():
+            events.append(session.bus._queue.get_nowait())
+        return queued, events
+
+    queued, events = asyncio.run(scenario())
+    # Giữ các bản MỚI NHẤT: bản cũ đã lạc hậu so với cuộc nói chuyện.
+    assert queued == ["utt_002", "utt_003", "utt_004"], queued
+    dropped = [e for e in events if e.type == EventType.UTTERANCE_DROPPED]
+    assert [e.utterance_id for e in dropped] == ["utt_000", "utt_001"], (
+        "bỏ bản dịch trong im lặng còn tệ hơn chính việc bỏ"
+    )
+    assert all(e.data["reason"] == "read_backlog" for e in dropped)
+
+
+def test_khong_bo_yeu_cau_doc_thu_cong(client):
+    """Client đang chờ đúng lượt đọc đó — bỏ đi là nó treo."""
+    from app.api.websocket import CopilotSession
+
+    config = client.app.state.config
+    config.tts.max_pending_reads = 1
+    session = CopilotSession(
+        websocket=None, runtime=client.app.state.runtime, config=config,
+        session_id="sess_manual",
+    )
+    session._tts_available = True
+    session.tts = object()
+
+    async def scenario():
+        session._loop = asyncio.get_running_loop()
+        for i in range(4):
+            session._speak(f"utt_{i:03d}", f"bản dịch {i}",
+                           field="translation", manual=True)
+        return session._tts_queue.qsize()
+
+    assert asyncio.run(scenario()) == 4, "yêu cầu đọc thủ công không được bỏ"

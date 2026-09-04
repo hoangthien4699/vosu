@@ -238,6 +238,24 @@ class TtsConfig:
     coach_length_scale: float = 1.35
     # §2.4.1 MVP scope — chốt phạm vi đọc tự động.
     auto_read_translation: bool = True
+    # Cắt lời đang đọc khi nghe thấy tiếng nói mới (§2.4.1 Barge-in).
+    #
+    # MẶC ĐỊNH TẮT, và đây là một sai lệch có chủ ý so với đặc tả. Barge-in
+    # được thiết kế cho tình huống NGƯỜI DÙNG nói đè lên bản đọc — họ muốn nói
+    # nên đừng đọc nữa. Nhưng vòng lặp chính của sản phẩm này là NGHE ĐỐI
+    # PHƯƠNG, và với một mic thì tiếng nói mới thường là đối phương nói tiếp,
+    # không phải người dùng chen ngang.
+    #
+    # Đo thật trên đoạn nói nhanh (nghỉ 0.9s giữa câu): 2 trong 6 bản dịch bị
+    # cắt, trong đó một câu bị cắt khi chưa đọc được chữ nào. Người dùng mất
+    # hẳn nội dung — đúng thứ sản phẩm sinh ra để cung cấp.
+    #
+    # Bật lại khi nguồn audio là mic của chính người dùng và bạn cần họ ngắt
+    # lời được. Benchmark B8 vẫn đo được bằng cách bật cờ này.
+    barge_in: bool = False
+    #: Số bản dịch tối đa xếp hàng chờ đọc. Vượt quá thì bỏ bản CŨ NHẤT và báo
+    #: ra, vì lúc đó nó đã lạc hậu so với cuộc nói chuyện đang diễn ra.
+    max_pending_reads: int = 4
     # Streaming theo câu/cụm để giảm time-to-first-audio (§2.4).
     stream_by_sentence: bool = True
     min_sentence_chars: int = 12
