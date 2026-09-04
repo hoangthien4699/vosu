@@ -158,6 +158,17 @@ hệ thống **giữ chiều của lượt trước** thay vì đoán bừa.
 tự đọc gì, client quyết khi nào đọc. Nếu để server tự đọc theo §2.4.1 thì nó
 bắt đầu đọc ngay khi có câu dịch đầu tiên, không đợi file dừng.
 
+Sau khi đọc xong bản dịch, file phát tiếp sau **~380ms** (đo trên client thật
+chạy trong Node). Con số này từng là **27.6 giây**: `noteBusy(type)` đọc biến
+`uttId` không tồn tại nên mỗi lượt `tts_done` ném ReferenceError ngay trước
+dòng `resolve()`, và chờ chỉ được giải phóng nhờ cầu chì 30 giây trong
+`speakAndWait`. Trình duyệt nuốt lỗi đó, không có gì báo ra màn hình.
+
+Không bộ đo Python nào bắt được, vì tất cả đều CHÉP LẠI luật của client thay
+vì chạy chính `app.js`. Nay có `tests/client_smoke.mjs` nạp app.js thật vào
+Node với DOM/WebAudio giả và bắn thử mọi loại event — CI chạy nó ở bước
+"Chạy thật client JS".
+
 Phát tiếp xong thì **tua nhanh qua đoạn im lặng**. File phát tiếp từ GIỮA
 khoảng nghỉ giữa hai câu — người nói thật nghỉ 2-4 giây mà điểm dừng chỉ ăn
 0.7s đầu, nên phần còn lại là im lặng phải ngồi nghe. Đo trên file nghỉ 2.5s:

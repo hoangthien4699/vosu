@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import pathlib
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -72,6 +73,28 @@ async def health() -> JSONResponse:
         return JSONResponse({"ready": False, "reason": "runtime chưa khởi tạo"}, 503)
     payload = await runtime.health()
     return JSONResponse(payload, status_code=200 if payload["ready"] else 503)
+
+
+@app.get("/debug/tasks")
+async def debug_tasks() -> JSONResponse:
+    """Task asyncio nào đang chạy, và nó đang đứng ở đâu.
+
+    Có endpoint này vì lỗi "session không bao giờ được giải phóng" đã xảy ra
+    ba lần với ba nguyên nhân khác nhau, và mỗi lần tôi lại phải đoán. Trên
+    macOS py-spy đòi quyền root nên không dump được stack từ ngoài. Đây là
+    đường duy nhất nhìn được vào trong mà không phải dựng lại từ đầu.
+    """
+    import asyncio
+    import traceback
+
+    out = []
+    for task in asyncio.all_tasks():
+        frames = []
+        for frame in task.get_stack(limit=6):
+            info = traceback.extract_stack(frame, limit=1)[0]
+            frames.append(f"{pathlib.Path(info.filename).name}:{info.lineno} {info.name}")
+        out.append({"name": task.get_name(), "done": task.done(), "stack": frames})
+    return JSONResponse({"count": len(out), "tasks": out})
 
 
 @app.get("/config")

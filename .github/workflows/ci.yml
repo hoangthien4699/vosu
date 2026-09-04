@@ -23,6 +23,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - uses: actions/setup-node@v4
+        # Khai báo tường minh thay vì dựa vào Node có sẵn trong image: bước
+        # "Chạy thật client JS" bên dưới là thứ duy nhất bắt được lỗi runtime
+        # của app.js, im lặng bỏ qua nó thì coi như không có.
+        with:
+          node-version: "20"
+
       - name: Cài dependency
         # Cố ý KHÔNG cài faster-whisper/model: bộ test phải chạy được mà không
         # cần GPU hay 2GB model. VAD có backend energy thay thế, STT/LLM/TTS
@@ -55,6 +62,16 @@ jobs:
 
       - name: Kiểm tra script shell
         run: bash -n scripts/*.sh
+
+      - name: Chạy thật client JS
+        # `node --check` chỉ bắt lỗi cú pháp. Lỗi tham chiếu biến không tồn tại
+        # thì phải CHẠY mới lộ — đã trả giá một lần: `tts_done` ném
+        # ReferenceError ngay trước dòng resolve(), làm file dừng 27.6 giây sau
+        # mỗi bản dịch. Không test Python nào bắt được vì chúng chép lại luật
+        # của client thay vì chạy chính app.js.
+        run: |
+          node --check client/web_test/app.js
+          node tests/client_smoke.mjs client/web_test
 
       - name: main không được chứa file riêng nhánh release
         # Chiến lược nhánh: config.yaml và BUILD.md CHỈ tồn tại trên release và
