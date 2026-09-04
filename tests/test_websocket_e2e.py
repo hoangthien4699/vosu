@@ -804,9 +804,9 @@ def test_tts_khong_doc_rac_cau_truc(tts_client):
 
 def test_tts_bo_qua_mau_khong_co_chu(tts_client):
     """Mẩu chỉ toàn dấu thì không có gì để đọc — đừng khởi động Piper cho nó."""
-    from app.api.websocket import CopilotSession
-
     import inspect
+
+    from app.api.websocket import CopilotSession
     source = inspect.getsource(CopilotSession._speak_translation)
     assert "isalnum" in source, "không có rào chắn cho mẩu rỗng nghĩa"
     assert "clean_value" in source
