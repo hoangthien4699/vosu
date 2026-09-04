@@ -61,6 +61,33 @@ curl -s localhost:8000/health | python3 -m json.tool
 2. Chọn một file trong `benchmarks/audio/` (ví dụ `sample_03.wav`)
 3. Xem transcript → bản dịch → hàm ý → gợi ý trả lời hiện dần
 
+### Nghe âm thanh đang phát trên máy
+
+Nút **"Nghe âm thanh máy…"** lấy audio của một tab/cửa sổ đang phát (YouTube,
+Meet, Zoom) thay cho micro. Nó lấy **luồng số trước khi ra loa**, nên:
+
+- chạy kể cả khi loa đang tắt hoặc đang cắm tai nghe;
+- sạch hơn micro hẳn — không tiếng vọng phòng, không nhiễu nền, không méo do
+  bộ khử vọng của trình duyệt.
+
+Chọn một **TAB** và tick **"Chia sẻ âm thanh tab"** trong hộp thoại. Chọn cửa
+sổ hoặc toàn màn hình thì nhiều trình duyệt không kèm âm thanh — lúc đó phần
+mềm báo lỗi rõ chứ không đứng im.
+
+Backend không cần biết nguồn từ đâu: nó chỉ nhận PCM 16kHz mono qua WebSocket.
+Mic, file, âm thanh máy đều đi chung một đường ống.
+
+**Cạm bẫy — vòng lặp phản hồi (B7):** nếu thu âm thanh toàn hệ thống trong khi
+TTS cũng phát ra chính thiết bị đó thì bản dịch bị thu lại rồi dịch tiếp. Thu
+theo TAB tránh được tự nhiên, miễn trang vosu nằm ở tab khác.
+
+**Cơ hội cho B9:** khi nguồn là âm thanh máy thì mọi thứ nghe được đều là của
+đối phương, còn mic là của người dùng. Chiều dịch khi đó biết chắc theo cấu
+trúc thay vì suy từ nhận diện ngôn ngữ — vốn đo được là tụt xuống 95% khi có
+nhiễu. Chưa làm; ghi lại ở đây vì nó bỏ được cả một lớp lỗi.
+
+### Phát file
+
 File được phát qua **đúng đường mà micro đi** — cùng resample về 16kHz, cùng
 chunk 100ms, cùng WebSocket — nên nó kiểm chứng pipeline thật, không phải
 đường tắt.
