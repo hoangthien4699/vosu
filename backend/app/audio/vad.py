@@ -182,7 +182,9 @@ class VadProcessor:
         *,
         sample_rate: int = 16_000,
         threshold: float = 0.5,
-        min_silence_ms: int = 400,
+        min_silence_ms: int = 900,
+        min_silence_after_ms: int = 550,
+        long_utterance_s: float = 2.5,
         min_speech_ms: int = 200,
         decay_ratio: float = 0.6,
     ) -> None:
@@ -192,6 +194,8 @@ class VadProcessor:
         self.frame_samples = backend.frame_samples
         self.frame_ms = 1000.0 * self.frame_samples / sample_rate
         self._min_silence_frames = max(1, round(min_silence_ms / self.frame_ms))
+        self._min_silence_frames_long = max(1, round(min_silence_after_ms / self.frame_ms))
+        self._long_utterance_s = long_utterance_s
         self._min_speech_frames = max(1, round(min_speech_ms / self.frame_ms))
         self._decay_ratio = decay_ratio
         self._tail = np.zeros(0, dtype=np.float32)
@@ -261,6 +265,24 @@ class VadProcessor:
             yield frame, list(self._process_frame(frame))
         self._tail = buf[total:].copy()
 
+    def _required_silence_frames(self) -> int:
+        """Ngưỡng im lặng thích ứng theo độ dài câu đang nói.
+
+        Một ngưỡng cố định không giải quyết được: ngắn thì cắt nhầm giữa câu
+        của người nói chậm, dài thì gộp nhiều câu thành một khối và người dùng
+        phải đợi hết đoạn mới thấy gì (đo thật: file 13.8s ba câu ra ĐÚNG MỘT
+        utterance, kết quả chỉ hiện ở giây thứ 11).
+
+        Người ta ngập ngừng ở đầu câu khi đang tìm chữ, còn khoảng nghỉ sau khi
+        đã nói trọn một ý thì gần như luôn là hết câu. Nên:
+
+            câu còn ngắn  -> chờ lâu  (đừng cắt người đang nghĩ)
+            câu đã dài    -> chờ ngắn (nghỉ sau một ý trọn = hết câu)
+        """
+        if self.current_speech_duration_s >= self._long_utterance_s:
+            return self._min_silence_frames_long
+        return self._min_silence_frames
+
     def _process_frame(self, frame: np.ndarray) -> Iterator[VadEvent]:
         t0 = time.perf_counter()
         probability = self._backend.probability(frame)
@@ -296,7 +318,7 @@ class VadProcessor:
             return
 
         self._silence_frames += 1
-        if self._silence_frames < self._min_silence_frames:
+        if self._silence_frames < self._required_silence_frames():
             return
 
         # --- VAD endpoint: điều kiện BẮT BUỘC để chạy final STT (§2.2) ---
@@ -353,6 +375,8 @@ def build_vad(config) -> VadProcessor:
         sample_rate=config.audio.sample_rate,
         threshold=config.vad.threshold,
         min_silence_ms=config.vad.min_silence_ms,
+        min_silence_after_ms=config.vad.min_silence_after_ms,
+        long_utterance_s=config.vad.long_utterance_s,
         min_speech_ms=config.vad.min_speech_ms,
         decay_ratio=config.vad.decay_ratio,
     )

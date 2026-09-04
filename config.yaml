@@ -47,6 +47,9 @@ vad:
   #     900        1          1     <- đang dùng
   #    1000        0          2
   min_silence_ms: 900
+  # Ngưỡng ngắn khi câu đã dài hơn long_utterance_s (tránh gộp nhiều câu)
+  min_silence_after_ms: 550
+  long_utterance_s: 2.5
   min_speech_ms: 200
 
 chunker:
@@ -56,6 +59,9 @@ chunker:
   # nên tắt đi sẽ nhường toàn bộ CPU cho final STT — final vẫn luôn chạy vì
   # nó do VAD endpoint kích hoạt, không phụ thuộc partial.
   # Bật lại nếu muốn thấy transcript hiện dần trong lúc nói.
+  # Đo trên Mac (Whisper chạy CPU): bật partial làm STT tranh CPU với câu kế
+  # tiếp, độ trễ trượt dần qua từng câu 644 -> 1106 -> 1552ms, chữ dịch đầu
+  # tiên chậm từ 2.4s lên 3.5s, và một câu mất hẳn phần đọc. Giữ tắt.
   enable_partial: false
 
 stt:

@@ -125,3 +125,62 @@ def test_max_utterance_cuong_buc_final_khi_vad_khong_chot_cau():
 
     finals = [s for s in feed_streaming(make_chunker(max_utterance_s=3.0), stream) if s.is_final]
     assert finals and finals[0].trigger == "max_duration"
+
+
+def test_nguong_im_lang_thich_ung_theo_do_dai_cau():
+    """Câu còn ngắn thì chờ lâu, câu đã nói dài rồi thì chốt sớm.
+
+    Một ngưỡng im lặng CỐ ĐỊNH không sửa được cả hai phía: để ngắn thì cắt
+    nhầm giữa câu của người nói chậm, để dài thì gộp nhiều câu thành một khối.
+    Đo thật với ngưỡng cố định 900ms: file 13.8s ba câu ra ĐÚNG MỘT utterance,
+    bản dịch chỉ hiện ở giây thứ 11 — người dùng thấy như phần mềm "đọc hết
+    đoạn rồi mới xử lý" thay vì dịch từng câu.
+
+    Người ta ngập ngừng ở ĐẦU câu khi đang tìm chữ; khoảng nghỉ SAU khi đã nói
+    trọn một ý thì gần như luôn là hết câu.
+    """
+    vad = VadProcessor(
+        EnergyVadBackend(),
+        min_silence_ms=900,
+        min_silence_after_ms=550,
+        long_utterance_s=2.5,
+    )
+    rong, hep = vad._min_silence_frames, vad._min_silence_frames_long
+    assert hep < rong
+
+    # Chưa nói -> ngưỡng rộng, đừng cắt người đang tìm chữ.
+    assert vad._required_silence_frames() == rong
+
+    # Mới nói 1s -> vẫn còn ngắn, giữ ngưỡng rộng.
+    vad._triggered = True
+    vad._speech_start_s = 0.0
+    vad._samples_seen = int(1.0 * SR)
+    assert vad._required_silence_frames() == rong
+
+    # Đã nói 3s trọn một ý -> khoảng nghỉ ngắn cũng đủ coi là hết câu.
+    vad._samples_seen = int(3.0 * SR)
+    assert vad._required_silence_frames() == hep
+
+
+def test_nhieu_cau_cach_nhau_700ms_khong_bi_gop_lam_mot():
+    """Ba câu ~2.5s cách nhau 0.7s phải ra BA segment, không phải một.
+
+    Đây là ca người dùng gặp thật: một đoạn ghi âm nhiều câu thoại phải được
+    dịch từng câu ngay khi câu đó dứt, chứ không đợi hết đoạn.
+    """
+    vad = VadProcessor(
+        EnergyVadBackend(),
+        min_silence_ms=900,
+        min_silence_after_ms=550,
+        long_utterance_s=2.5,
+        min_speech_ms=200,
+    )
+    chunker = AudioChunker(vad)
+    rng = np.random.default_rng(0)
+    stream = np.concatenate(
+        [silence(0.5, rng)]
+        + [x for _ in range(3) for x in (speech(2.6, rng), silence(0.7, rng))]
+        + [silence(1.5, rng)]
+    )
+    finals = [s for s in feed_streaming(chunker, stream) if s.is_final]
+    assert len(finals) == 3, f"{len(finals)} segment — các câu đã bị gộp lại"
