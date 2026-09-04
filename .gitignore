@@ -24,6 +24,8 @@ config.local.yaml
 
 # --- Audio mẫu ---
 *.wav
+# mốc dựng kèm audio benchmark — sinh lại bằng benchmarks/e2e_gen.py
+*.moc.json
 *.mp3
 !tests/fixtures/*.wav
 
