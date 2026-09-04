@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from .common import REPO_ROOT, Distribution, environment
-from .fidelity_cases import ALL, missing
+from .fidelity_cases import ALL, has_particle, inverted, missing, stiff_hits
 
 
 async def run(model: Path | None, temperature: float | None, n_predict: int | None):
@@ -127,7 +127,19 @@ def main() -> int:
 
     if not args.quiet:
         for case, translation, gone in rows:
-            flag = "  <<< THIẾU: " + " | ".join("/".join(g) for g in gone) if gone else ""
+            notes = []
+            if gone:
+                notes.append("THIẾU " + " | ".join("/".join(g) for g in gone))
+            stiff = stiff_hits(translation)
+            if stiff:
+                notes.append("KHÔ: " + ", ".join(stiff))
+            flipped = inverted(case, translation)
+            if flipped:
+                notes.append("ĐẢO NGHĨA: " + ", ".join(flipped))
+            if case.casual and case.lang != config.session.user_language \
+                    and not has_particle(translation):
+                notes.append("thiếu tiểu từ")
+            flag = "  <<< " + " · ".join(notes) if notes else ""
             who = "BẠN" if case.lang == config.session.user_language else "HỌ "
             print(f"  {who} {case.text}")
             print(f"       -> {translation}{flag}")
@@ -137,6 +149,15 @@ def main() -> int:
     print(f"  yếu tố giữ được : {kept}/{total_elements} ({kept/total_elements*100:.0f}%)")
     print(f"  câu bị thiếu ý  : {bad_cases}/{len(rows)}")
     print(f"  phải dịch lại   : {retried}/{len(rows)}")
+
+    stiff_rows = [(c, t) for c, t, _ in rows if stiff_hits(t)]
+    casual_vi = [(c, t) for c, t, _ in rows
+                 if c.casual and c.lang != config.session.user_language]
+    flat = [(c, t) for c, t in casual_vi if not has_particle(t)]
+    flipped_rows = [(c, t) for c, t, _ in rows if inverted(c, t)]
+    print(f"  câu bị đảo nghĩa: {len(flipped_rows)}/{len(rows)}")
+    print(f"  câu có từ khô   : {len(stiff_rows)}/{len(rows)}")
+    print(f"  câu đời thường thiếu tiểu từ: {len(flat)}/{len(casual_vi)}")
     print(f"  thời gian sinh  : {Distribution.of(latencies).summary()}")
 
     out = REPO_ROOT / "benchmarks" / "results" / "fidelity.json"
@@ -145,6 +166,8 @@ def main() -> int:
                "temperature": config.llm.temperature, "n_predict": config.llm.n_predict,
                "kept": kept, "total": total_elements, "bad_cases": bad_cases,
                "retried": retried,
+               "stiff": len(stiff_rows), "flat": len(flat), "casual": len(casual_vi),
+               "inverted": len(flipped_rows),
                "rows": [{"source": c.text, "lang": c.lang, "translation": t,
                          "missing": m, "note": c.note} for c, t, m in rows]}
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
