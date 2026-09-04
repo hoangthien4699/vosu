@@ -83,3 +83,31 @@ def test_ui_xu_ly_moi_event_backend_phat():
 
     assert not (backend - handled), f"UI không xử lý: {sorted(backend - handled)}"
     assert not (handled - backend), f"UI xử lý event không tồn tại: {sorted(handled - backend)}"
+
+
+def test_tua_nhanh_qua_im_lang_khi_phat_file():
+    """Sau khi đọc xong bản dịch, file phát tiếp từ GIỮA khoảng nghỉ.
+
+    Người nói thật nghỉ 2-4 giây giữa hai câu, mà điểm dừng chỉ ăn 0.7s đầu —
+    còn lại là im lặng phải ngồi nghe. Đo trên file nghỉ 2.5s: chết 1877ms sau
+    mỗi lượt đọc; tua 8x còn 283ms.
+
+    Gửi nhanh hơn thời gian thực không ảnh hưởng VAD vì nó đếm theo MẪU audio,
+    không theo đồng hồ — nhưng chỉ đúng khi VẪN GỬI ĐỦ MỌI MẪU, chỉ gửi nhanh.
+    Test này khóa đúng điều đó: nhánh im lặng phải có `ws.send`.
+    """
+    js = (CLIENT_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "SILENCE_SPEEDUP" in js and "hasSpeech" in js
+
+    start = js.index("if (!speech && ui.autoPause.checked)")
+    branch = js[start : js.index("continue;", start)]
+    assert "ws.send(" in branch, "tua nhanh mà BỎ mẫu thì VAD sẽ cắt câu sai chỗ"
+    assert "scheduleFileChunk" not in branch, "không phát im lặng ra loa"
+    assert "SILENCE_SPEEDUP" in branch
+
+    # Gặp tiếng nói thì lập tức về nhịp thật, và đặt lại mốc lịch phát: mốc cũ
+    # đã trôi qua từ lâu trong lúc tua.
+    reset_at = js.index("if (skipping)")
+    after = js[reset_at : js.index("scheduleFileChunk", reset_at)]
+    assert "f.head = ctx.currentTime" in after

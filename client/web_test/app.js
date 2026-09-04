@@ -11,6 +11,11 @@
 
 const TARGET_SR = 16000;
 const CHUNK_MS = 100;
+//: Dưới ngưỡng này coi là im lặng. Nền phòng yên ~0.001, tiếng nói > 0.01.
+const SILENCE_RMS = 0.004;
+//: Tua đoạn im lặng nhanh gấp ngần này. Không tua vô hạn: còn phải kịp nhận
+//: lệnh dừng ở cuối câu trước khi lấn sang câu sau.
+const SILENCE_SPEEDUP = 8;
 
 const el = (id) => document.getElementById(id);
 const ui = {
@@ -678,6 +683,13 @@ async function streamFile(file) {
   await playbackLoop();
 }
 
+/** Chunk này có tiếng nói không (đo thô bằng năng lượng). */
+function hasSpeech(chunk) {
+  let sum = 0;
+  for (let i = 0; i < chunk.length; i += 4) sum += chunk[i] * chunk[i];
+  return Math.sqrt(sum / Math.ceil(chunk.length / 4)) > SILENCE_RMS;
+}
+
 async function playbackLoop() {
   const f = state.file;
   const ctx = ensurePlayCtx();
@@ -686,6 +698,7 @@ async function playbackLoop() {
   // ở cuối câu thì loa im gần như tức thì.
   const LEAD_S = 0.2;
   f.head = ctx.currentTime + 0.15;
+  let skipping = false;
 
   while (f === state.file && f.index < f.chunks.length) {
     if (f.paused) {
@@ -698,6 +711,31 @@ async function playbackLoop() {
     if (!state.running || state.ws?.readyState !== WebSocket.OPEN) return;
 
     const chunk = f.chunks[f.index];
+    // Tua nhanh qua đoạn im lặng.
+    //
+    // Sau khi đọc xong bản dịch, file phát tiếp — nhưng chỗ phát tiếp là giữa
+    // khoảng nghỉ giữa hai câu. Người nói thật nghỉ 2-4 giây, mà điểm dừng chỉ
+    // ăn mất 0.7s đầu, nên còn 1.5-3.5s im lặng phải ngồi nghe trước khi câu
+    // sau bắt đầu. Đo trên file nghỉ 2.5s: chết 1.8 giây.
+    //
+    // Gửi nhanh hơn thời gian thực KHÔNG ảnh hưởng VAD: nó đếm theo MẪU audio,
+    // không theo đồng hồ. Vẫn gửi đủ mọi mẫu, chỉ là gửi nhanh. Gặp chunk có
+    // tiếng thì lập tức về đúng nhịp thật và phát ra loa, nên không bỏ sót
+    // đoạn nào người dùng cần nghe.
+    const speech = hasSpeech(chunk);
+    if (!speech && ui.autoPause.checked) {
+      state.ws.send(floatToPcm16(chunk));
+      f.index += 1;
+      skipping = true;
+      if (f.index % 20 === 0 || f.index === f.chunks.length) updateFileUi();
+      await new Promise((r) => setTimeout(r, CHUNK_MS / SILENCE_SPEEDUP));
+      continue;
+    }
+    if (skipping) {
+      skipping = false;
+      f.head = ctx.currentTime + 0.15;   // lịch phát cũ đã trôi qua từ lâu
+    }
+
     state.ws.send(floatToPcm16(chunk));
     scheduleFileChunk(chunk, f.head);   // nghe được đúng đoạn vừa gửi
     f.head += chunkS;
