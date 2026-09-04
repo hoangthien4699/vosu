@@ -128,6 +128,22 @@ class SttConfig:
     # 8 luồng 1704ms, 10 luồng 1803ms (10 thì tranh nhân với llama-server).
     # Trên CUDA thì tham số này không dùng tới.
     cpu_threads: int = 0
+    # --- gộp câu bị ngắt giữa chừng ---
+    #
+    # Chỉ đo độ dài khoảng lặng thì không tách được "ngập ngừng giữa câu" với
+    # "đã nói xong": đo thật, khoảng ngập ngừng giữa câu của người nói chậm
+    # (800ms) còn DÀI HƠN khoảng nghỉ giữa hai câu của người nói bình thường
+    # (700ms). Nên xét thêm NỘI DUNG transcript (xem ai/completeness.py):
+    # nghe ra câu còn dở thì giữ lại, chờ xem có nói tiếp không rồi ghép.
+    merge_incomplete: bool = True
+    #: Chờ ngần này rồi vẫn không ai nói tiếp thì dịch nguyên câu dở — người ta
+    #: có quyền bỏ lửng câu, giữ mãi là mất hẳn câu đó.
+    merge_window_ms: int = 1200
+    #: Ghép tối đa ngần này lần cho một câu. Chặn trường hợp heuristic đọc sai
+    #: liên tục làm câu dài vô hạn và độ trễ tăng không giới hạn.
+    max_merges: int = 2
+    #: Dài quá ngần này thì thôi không ghép nữa, dù nghe vẫn còn dở.
+    max_merged_s: float = 20.0
 
 
 @dataclass
