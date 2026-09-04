@@ -17,8 +17,25 @@ paths:
   #
   # CẢNH BÁO VRAM: RSS 2830MB. Cộng Whisper `small` (~1.8GB) + KV (~0.5GB) +
   # CUDA overhead (~0.8GB) = ~5.9GB, VƯỢT trần 5.5GB của §3.1.
-  # Muốn dùng 4B trên GPU 6GB: hạ whisper_model xuống `base` (tổng còn ~5.1GB).
-  # Hoặc quay lại models/qwen3.5-2b-q8_0.gguf và chấp nhận lỗi đảo nghĩa.
+  # Muốn dùng 4B trên GPU 6GB thì phải chọn một trong hai, KHÔNG có lựa chọn
+  # nào miễn phí:
+  #
+  #   a) hạ whisper_model xuống `base` (tổng còn ~5.1GB) — nhưng đo WER trên
+  #      20 câu Anh/Việt thì `base` tệ hơn hẳn, và càng ồn càng giãn:
+  #
+  #          SNR       base    small
+  #          sạch      5.3%     1.1%
+  #          20dB      9.1%     1.1%   <- phòng họp bình thường
+  #          10dB     14.4%     8.0%
+  #           5dB     27.8%    16.6%
+  #
+  #      `base` nghe nhầm kiểu "thanh toán" -> "thang tòa án", "bàn giao" ->
+  #      "bàn dào". Nghe nhầm từ khoá rồi dịch sai hẳn nghĩa — tệ hơn nhiều so
+  #      với dịch hơi cứng.
+  #
+  #   b) quay lại models/qwen3.5-2b-q8_0.gguf và chấp nhận lỗi đảo nghĩa.
+  #
+  # Nghe sai thì dịch gì cũng sai, nên (b) đáng cân nhắc trước (a).
   # CHẠY benchmarks/b4_vram.py để có số thật trước khi chốt.
   llm_gguf: models/qwen3.5-4b-q4_k_m.gguf
   llama_server_bin: models/llama-server
@@ -50,8 +67,17 @@ chunker:
   enable_partial: true
 
 stt:
+  # beam 5 gần như không hơn: 8.0% -> 7.5% ở 10dB, đổi lấy +180ms. Không đáng.
   beam_size: 1
+  # null = Whisper tự nhận diện ngôn ngữ, cần cho việc xác định chiều dịch.
+  #
+  # Ghim sẵn ngôn ngữ thì nhanh gần gấp đôi (khỏi chạy encoder lượt hai), nhưng
+  # ta không biết trước ai sắp nói. Đã thử dò bằng model `tiny` rồi ghim cho
+  # `small`: bỏ, vì có nhiễu thì tiny dò đúng 95% còn small 100% — cứ 20 câu
+  # sai ngôn ngữ 1 câu là hỏng nguyên câu đó.
   language: null
+  # Chỉ có tác dụng khi STT chạy CPU. Build CUDA để 0.
+  cpu_threads: 0
 
 llm:
   host: 127.0.0.1
