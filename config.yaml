@@ -13,7 +13,8 @@ paths:
   # "đủ nhanh và đủ chính xác để LLM hiểu intent", không phải "chính xác
   # tuyệt đối". Chỉ nâng nếu benchmark cho thấy Small thực sự không đủ.
   whisper_model: small
-  # Qwen3.5-4B Q4_K_M — 4B hết lỗi đảo nghĩa mà 2B mắc phải.
+  # Qwen3.5-4B Q4_K_M — model DUY NHẤT của dự án. 4B hết lỗi đảo nghĩa mà 2B
+  # mắc phải. Đã bỏ hẳn Qwen3.5-2B, Gemma 3 4B, Qwen2.5-3B.
   #
   # CẢNH BÁO VRAM: RSS 2830MB. Cộng Whisper `small` (~1.8GB) + KV (~0.5GB) +
   # CUDA overhead (~0.8GB) = ~5.9GB, VƯỢT trần 5.5GB của §3.1.
@@ -33,9 +34,14 @@ paths:
   #      "bàn dào". Nghe nhầm từ khoá rồi dịch sai hẳn nghĩa — tệ hơn nhiều so
   #      với dịch hơi cứng.
   #
-  #   b) quay lại models/qwen3.5-2b-q8_0.gguf và chấp nhận lỗi đảo nghĩa.
+  #   b) ĐÃ BỎ. Trước đây có thể quay về models/qwen3.5-2b-q8_0.gguf, nhưng
+  #      dự án đã chốt chỉ dùng MỘT model để ưu tiên chất lượng dịch — 2B
+  #      nhanh hơn ~1.7s mỗi câu nhưng dịch sai thành ngữ ("table this
+  #      discussion" -> "đặt cuộc thảo luận"). Xem models/README.md.
   #
-  # Nghe sai thì dịch gì cũng sai, nên (b) đáng cân nhắc trước (a).
+  # Nghĩa là KHÔNG còn đường lui nào không đánh đổi chất lượng: build CUDA cần
+  # card 8GB chứ không phải 6GB. Đây là thay đổi so với §3.1 và cần biết TRƯỚC
+  # khi mua/dựng máy.
   # CHẠY benchmarks/b4_vram.py để có số thật trước khi chốt.
   llm_gguf: models/qwen3.5-4b-q4_k_m.gguf
   llama_server_bin: models/llama-server
