@@ -250,7 +250,23 @@ class CopilotSession:
         try:
             await self._receive_loop()
         finally:
-            await self._cancel_all_work()
+            # CÓ GIỚI HẠN THỜI GIAN. Dọn dẹp mà treo thì `run()` không bao giờ
+            # trả về, session ở lại trong sổ đếm, và MỌI kết nối sau đều bị từ
+            # chối "đã đạt giới hạn 1 session" cho tới khi restart server. Đã
+            # gặp thật hai lần, hai nguyên nhân khác nhau — nên chặn ở đây một
+            # lần cho mọi nguyên nhân, thay vì chỉ vá từng cái.
+            try:
+                await asyncio.wait_for(self._cancel_all_work(), timeout=5.0)
+            except asyncio.TimeoutError:
+                stuck = [
+                    t.get_name() for t in asyncio.all_tasks()
+                    if t is not asyncio.current_task() and not t.done()
+                ]
+                logger.error(
+                    "%s: dọn dẹp quá 5s, bỏ qua để giải phóng session. "
+                    "Task còn chạy: %s",
+                    self.session_id, ", ".join(stuck) or "không rõ",
+                )
             with contextlib.suppress(Exception):
                 await self.bus.emit(
                     EventType.SESSION_ENDED,
@@ -258,7 +274,7 @@ class CopilotSession:
                           "utterances": self.state.total_utterances},
                 )
             await self.bus.close()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
                 await asyncio.wait_for(sender, timeout=3.0)
             if self.tts is not None:
                 await self.tts.close()
