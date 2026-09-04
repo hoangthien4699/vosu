@@ -158,6 +158,21 @@ hệ thống **giữ chiều của lượt trước** thay vì đoán bừa.
 tự đọc gì, client quyết khi nào đọc. Nếu để server tự đọc theo §2.4.1 thì nó
 bắt đầu đọc ngay khi có câu dịch đầu tiên, không đợi file dừng.
 
+Phát tiếp xong thì **tua nhanh qua đoạn im lặng**. File phát tiếp từ GIỮA
+khoảng nghỉ giữa hai câu — người nói thật nghỉ 2-4 giây mà điểm dừng chỉ ăn
+0.7s đầu, nên phần còn lại là im lặng phải ngồi nghe. Đo trên file nghỉ 2.5s:
+
+```
+không tua : 1877ms chết sau mỗi lượt đọc
+tua 8x    :  283ms
+```
+
+Gửi nhanh hơn thời gian thực KHÔNG ảnh hưởng VAD vì nó đếm theo mẫu audio chứ
+không theo đồng hồ — nhưng chỉ đúng khi vẫn gửi ĐỦ MỌI MẪU, chỉ là gửi nhanh.
+Gặp chunk có tiếng thì lập tức về đúng nhịp thật và phát ra loa, nên không bỏ
+sót đoạn nào cần nghe. Kiểm trên cả file nghỉ dài lẫn nghỉ ngắn: transcript
+đủ câu, không câu nào cụt.
+
 Khoảng dừng ở mỗi câu dài bao lâu, đo trên file 6 câu:
 
 ```
