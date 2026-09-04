@@ -1080,8 +1080,14 @@ class CopilotSession:
             EventType.TTS_DONE,
             utterance_id=utterance_id,
             data={"chunks": chunks,
-                  "synthesis_ms": round((_time.monotonic() - started) * 1000.0, 2)},
+                  "synthesis_ms": round((_time.monotonic() - started) * 1000.0, 2),
+                  "prewarmed": self.tts.used_standby},
         )
+
+        # Hâm nóng sẵn cho lượt sau, ngay lúc này — vừa đọc xong thì thường
+        # còn cả vài giây trước khi có câu tiếp theo, dùng để nạp model thay vì
+        # để lượt sau phải chờ. Đo thật: bớt được ~500ms mỗi câu.
+        self.tts.prewarm(voice, length_scale)
 
     # -- control frame (client -> server) --------------------------------- #
 
@@ -1157,9 +1163,10 @@ class CopilotSession:
             await self.tts.cancel(reason="session_end")
         self._drain_tts_queue()
         self._drain_pipeline_queue()
+        self._cancel_hold_timer()
         for task in (self._pipeline_worker, self._llm_worker, self._pipeline_task,
                      self._llm_task, self._partial_task, self._tts_current,
-                     self._tts_worker):
+                     self._tts_worker, self._hold_timer):
             if task is not None and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -1178,6 +1185,9 @@ class CopilotSession:
                 await self._send(event)
         except (WebSocketDisconnect, RuntimeError):
             logger.debug("%s: sender dừng vì kết nối đã đóng", self.session_id)
+            # Đóng bus NGAY: không còn ai rút event ra, để các worker cứ phát
+            # tiếp thì hàng đợi đầy và chúng chặn lại trên `put`.
+            await self.bus.close()
         except asyncio.CancelledError:
             raise
 

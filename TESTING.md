@@ -158,6 +158,23 @@ hệ thống **giữ chiều của lượt trước** thay vì đoán bừa.
 tự đọc gì, client quyết khi nào đọc. Nếu để server tự đọc theo §2.4.1 thì nó
 bắt đầu đọc ngay khi có câu dịch đầu tiên, không đợi file dừng.
 
+Khoảng dừng ở mỗi câu dài bao lâu, đo trên file 6 câu:
+
+```
+dừng file -> nghe xong (Whisper)   ~2.1s
+          -> dịch xong (LLM)       ~2.1s
+          -> có tiếng đọc          ~0.5s   (Piper, sau khi hâm nóng sẵn)
+          đọc bản dịch             ~2.6-3.5s
+          -> phát tiếp             ~0ms
+```
+
+Tức im lặng ~4.7s rồi mới nghe bản dịch. Đây là giá của pipeline, không phải
+lỗi — trừ một khoản đã cắt được: Piper vốn spawn tiến trình mới và nạp lại
+model cho TỪNG câu, mất ~500ms mỗi lần. Nay sau khi đọc xong một câu, hệ
+thống spawn sẵn tiến trình cho lượt sau trong lúc còn rảnh. Trường
+`prewarmed` trong `tts_done` cho biết lượt nào dùng được (câu đầu thì không,
+vì chưa có gì để hâm).
+
 Nút **"Tạm dừng"** cho bạn kiểm soát tay bất cứ lúc nào. Bấm "Tiếp tục" sẽ hủy
 lượt đọc đang dở và phát tiếp ngay.
 
