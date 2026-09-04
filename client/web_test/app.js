@@ -25,7 +25,7 @@ const ui = {
   translation: el("translation"), translationTitle: el("translationTitle"),
   coachHint: el("coachHint"),
   log: el("log"), pickFile: el("pickFile"), fileInput: el("fileInput"),
-  pauseBtn: el("pauseBtn"), autoPause: el("autoPause"),
+  pauseBtn: el("pauseBtn"), autoPause: el("autoPause"), captureDevice: el("captureDevice"),
   autoPauseWrap: el("autoPauseWrap"), filePanel: el("filePanel"),
   fileName: el("fileName"), fileBar: el("fileBar"), filePos: el("filePos"),
   fileState: el("fileState"), reviewSteps: el("reviewSteps"),
@@ -35,6 +35,7 @@ const ui = {
 
 const state = {
   ws: null, audioCtx: null, playCtx: null, stream: null, node: null,
+  captureSource: "mic",     // "mic" | "device" (âm thanh đang phát trên máy)
   running: false,
   pendingBinary: null,      // metadata của tts_audio_chunk đang chờ frame nhị phân
   playHead: 0,              // mốc lịch phát tiếp theo trong playCtx
@@ -86,17 +87,60 @@ function percentile(values, q) {
 
 /* ------------------------------ thu âm -------------------------------- */
 
-async function startCapture() {
-  state.stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      // Tắt xử lý của trình duyệt: ta muốn đo đúng thứ mic đưa vào, và các bộ
-      // xử lý này che mất chính hiện tượng mà B7/B9 cần quan sát.
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-    },
+/** Lấy luồng audio từ MIC hoặc từ ÂM THANH THIẾT BỊ (tab/cửa sổ/màn hình).
+ *
+ * Nguồn "device" lấy LUỒNG SỐ trước khi ra loa, nên nó chạy kể cả khi loa đang
+ * tắt, và sạch hơn hẳn mic: không tiếng vọng phòng, không nhiễu nền, không
+ * méo do bộ khử vọng của trình duyệt.
+ *
+ * Trình duyệt bắt buộc phải xin cả video mới cho lấy audio của tab — ta bỏ
+ * track video ngay, không dùng tới.
+ */
+async function getStream(kind) {
+  if (kind !== "device") {
+    return navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        // Tắt xử lý của trình duyệt: ta muốn đo đúng thứ mic đưa vào, và các
+        // bộ xử lý này che mất chính hiện tượng mà B7/B9 cần quan sát.
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
+  }
+
+  const stream = await navigator.mediaDevices.getDisplayMedia({
+    video: true,
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
   });
+  for (const track of stream.getVideoTracks()) {
+    track.stop();
+    stream.removeTrack(track);
+  }
+  if (!stream.getAudioTracks().length) {
+    throw new Error(
+      "Nguồn bạn chọn không kèm âm thanh. Chọn một TAB và tick "
+      + "'Chia sẻ âm thanh tab' trong hộp thoại."
+    );
+  }
+  return stream;
+}
+
+async function startCapture(kind = "mic") {
+  state.stream = await getStream(kind);
+  state.captureSource = kind;
+
+  // Người dùng bấm 'Ngừng chia sẻ' trên thanh của trình duyệt -> dừng gọn,
+  // đừng để phần mềm đứng im như đang chạy mà không có audio nào tới.
+  for (const track of state.stream.getAudioTracks()) {
+    track.addEventListener("ended", () => {
+      if (state.running) {
+        log("file", "nguồn âm thanh đã ngừng chia sẻ");
+        stop();
+      }
+    }, { once: true });
+  }
 
   state.audioCtx = new AudioContext();
   const source = state.audioCtx.createMediaStreamSource(state.stream);
@@ -421,16 +465,18 @@ function connect() {
   state.ws = ws;
 }
 
-async function start() {
+async function start(kind = "mic") {
   try {
-    state.file = null;         // chế độ micro: không có gì để tạm dừng
+    state.file = null;         // thu trực tiếp: không có gì để tạm dừng
     updateFileUi();
+    await closeSocket();       // xem closeSocket(): mở đè sẽ bị từ chối session
     connect();
-    await startCapture();
+    await startCapture(kind);
     state.running = true;
     ui.toggle.textContent = "Dừng";
+    setStatus(kind === "device" ? "đang nghe âm thanh thiết bị" : "đang nghe micro", "on");
   } catch (err) {
-    setStatus(`lỗi mic: ${err.message}`, "err");
+    setStatus(`lỗi nguồn âm thanh: ${err.message}`, "err");
     log("error", err.message);
     stop();
   }
@@ -828,7 +874,8 @@ ui.autoPause.onchange = () => {
   }
 };
 
-ui.toggle.onclick = () => (state.running ? stop() : start());
+ui.toggle.onclick = () => (state.running ? stop() : start("mic"));
+ui.captureDevice.onclick = () => (state.running ? stop() : start("device"));
 ui.stopTts.onclick = () => {
   stopPlayback();
   if (state.ws?.readyState === WebSocket.OPEN) {

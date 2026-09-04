@@ -58,11 +58,11 @@ Object.defineProperty(globalThis, "navigator", { value: {}, configurable: true }
 
 /* ---- nạp app.js thật ---- */
 let src = fs.readFileSync(path.join(ROOT, "app.js"), "utf8");
-src += "\nglobalThis.__app = { state, onEvent, streamFile };\n";
+src += "\nglobalThis.__app = { state, onEvent, streamFile, start, stop };\n";
 const tmp = path.join(process.env.TMPDIR || "/tmp", "app_smoke.mjs");
 fs.writeFileSync(tmp, src);
 await import(tmp);
-const { state, onEvent, streamFile } = globalThis.__app;
+const { state, onEvent, streamFile, start, stop } = globalThis.__app;
 
 /* ---- payload tối thiểu cho từng loại event backend phát ---- */
 const U = "utt_001";
@@ -176,6 +176,69 @@ if (sockets.length < 2) {
     problems.push("mở kết nối MỚI trước khi đóng kết nối CŨ -> server từ chối");
   }
 }
+
+/* ---- nghe âm thanh thiết bị (YouTube đang phát trên máy) ---- */
+class FakeTrack {
+  constructor(kind) { this.kind = kind; this.stopped = false; this._l = {}; }
+  stop() { this.stopped = true; }
+  addEventListener(t, fn) { (this._l[t] ??= []).push(fn); }
+}
+function fakeStream(withAudio) {
+  const tracks = [new FakeTrack("video")];
+  if (withAudio) tracks.push(new FakeTrack("audio"));
+  return {
+    _tracks: tracks,
+    getTracks() { return this._tracks; },
+    getVideoTracks() { return this._tracks.filter((t) => t.kind === "video"); },
+    getAudioTracks() { return this._tracks.filter((t) => t.kind === "audio"); },
+    removeTrack(t) { this._tracks = this._tracks.filter((x) => x !== t); },
+  };
+}
+let displayCalls = 0, shared = null, videoTrack = null;
+Object.defineProperty(globalThis, "navigator", {
+  value: { mediaDevices: {
+    getDisplayMedia: async () => {
+      displayCalls += 1;
+      shared = fakeStream(true);
+      videoTrack = shared.getVideoTracks()[0];
+      return shared;
+    },
+    getUserMedia: async () => { problems.push("nguồn 'device' lại đi gọi getUserMedia"); return fakeStream(true); },
+  } },
+  configurable: true,
+});
+// AudioWorklet không có trong Node — chỉ cần chạy tới đó là đủ chứng minh
+// đường đi đúng nguồn; phần sau là API trình duyệt, không phải logic của ta.
+Ctx.prototype.createMediaStreamSource = function () { return { connect() {} }; };
+Ctx.prototype.createGain = function () { return { gain: {}, connect() {} }; };
+Object.defineProperty(Ctx.prototype, "audioWorklet", {
+  value: { addModule: async () => { throw new Error("__đã tới AudioWorklet__"); } },
+  configurable: true,
+});
+globalThis.URL.createObjectURL = () => "blob:x";
+globalThis.URL.revokeObjectURL = () => {};
+globalThis.Blob = class { constructor() {} };
+
+await start("device");
+if (displayCalls !== 1) problems.push(`đáng lẽ gọi getDisplayMedia 1 lần, thực tế ${displayCalls}`);
+if (shared && shared.getVideoTracks().length) {
+  problems.push("track video không được gỡ khỏi stream");
+}
+if (videoTrack && !videoTrack.stopped) {
+  problems.push("track video chưa stop() — camera/quay màn hình vẫn chạy vô ích");
+}
+
+/* nguồn không kèm audio -> phải báo lỗi rõ, không im lặng chạy tiếp */
+globalThis.navigator.mediaDevices.getDisplayMedia = async () => fakeStream(false);
+stop();
+await start("device");
+const status = document.getElementById("status").textContent;
+// Chuỗi phải ĐẶC TRƯNG cho đúng lỗi này. Bắt mỗi "âm thanh" thì mọi lỗi khác
+// cũng khớp — assertion đó không kiểm được gì (đã mắc một lần).
+if (!/không kèm âm thanh/i.test(status)) {
+  problems.push("nguồn không kèm audio mà không báo rõ, chỉ hiện: " + status);
+}
+if (state.running) problems.push("nguồn không kèm audio mà vẫn coi như đang chạy");
 
 console.log(JSON.stringify({ problems }));
 process.exit(0);
