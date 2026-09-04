@@ -28,6 +28,12 @@ class EventType(str, Enum):
     AUDIO_STARTED = "audio_started"
 
     # --- STT ---
+    #: VAD vừa chốt xong một câu — phát NGAY, trước khi STT chạy.
+    #:
+    #: Client phát file cần mốc này để dừng đúng chỗ câu vừa dứt. Nếu đợi
+    #: `stt_final` thì file đã chạy quá thêm ~1.9s (thời gian Whisper nghe),
+    #: tức là đã phát lấn sang câu sau rồi mới dừng.
+    UTTERANCE_ENDPOINT = "utterance_endpoint"
     STT_PARTIAL = "stt_partial"
     STT_FINAL = "stt_final"
 
@@ -60,6 +66,7 @@ BINARY_EVENTS = frozenset({EventType.TTS_AUDIO_CHUNK})
 #: Event thuộc vòng đời một utterance cụ thể (bắt buộc có utterance_id).
 UTTERANCE_SCOPED = frozenset(
     {
+        EventType.UTTERANCE_ENDPOINT,
         EventType.STT_PARTIAL,
         EventType.STT_FINAL,
         EventType.COPILOT_STARTED,

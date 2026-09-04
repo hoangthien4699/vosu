@@ -65,29 +65,34 @@ File được phát qua **đúng đường mà micro đi** — cùng resample v�
 chunk 100ms, cùng WebSocket — nên nó kiểm chứng pipeline thật, không phải
 đường tắt.
 
-#### Chế độ "nghe lại từng câu" (bật mặc định)
+#### Chế độ "dừng từng câu để đọc bản dịch" (bật mặc định)
 
-Với file có nhiều câu, phát liên tục sẽ khiến câu sau đến khi câu trước còn
-đang xử lý — backend hủy utterance cũ để nhường utterance mới, và kết quả trên
-màn hình bị thay giữa chừng. Đo trên file 3 câu:
+File **phát ra loa** đúng nhịp thời gian thực, đồng bộ với dòng byte gửi lên
+server. Phát tới hết câu nào thì **dừng ngay tại đó**, đọc bản dịch của chính
+câu đó, xong mới phát tiếp:
 
-| | Phát liên tục | Từng câu một |
-|---|---|---|
-| Câu nhận diện | 3 | 3 |
-| **TTS bị hủy giữa chừng** | **1** | **0** |
-| Thời gian | 14s | 26s |
+```
+… file phát …
+[câu 1 dứt]  -> DỪNG -> đọc bản dịch câu 1 -> phát tiếp
+[câu 2 dứt]  -> DỪNG -> đọc bản dịch câu 2 -> phát tiếp
+```
 
-Khi bật, hệ thống **tự dừng phát ngay khi chốt được một câu**, và chỉ phát tiếp
-sau khi câu đó xử lý xong hoàn toàn — nghĩa là LLM sinh xong **và** không còn
-lượt TTS nào đang đọc. Chờ mỗi `copilot_done` là chưa đủ: một bản dịch nhiều
-câu sẽ có nhiều lượt `tts_started`/`tts_done`.
+Không phát lại âm thanh gốc: bạn vừa nghe câu đó lúc file chạy tới rồi.
 
-Với mỗi câu, hệ thống phát lại **hai bước theo thứ tự**:
+**Mốc dừng lấy từ `utterance_endpoint`, không phải `stt_final`.** Server phát
+`utterance_endpoint` ngay khi VAD chốt câu, trước cả khi Whisper chạy. Đợi
+`stt_final` thì muộn hơn 1.8-2.1s (đo thật) — file đã phát lấn sang câu sau
+rồi mới dừng, và người dùng nghe bản dịch câu trước chồng lên câu sau.
 
-| | Nghe gì | Giọng |
-|---|---|---|
-| 1 | **Âm thanh gốc** — cắt đúng đoạn của câu đó từ chính file bạn chọn | file gốc |
-| 2 | **Bản dịch** | tuỳ chiều |
+Đo trên file 6 câu: `utterance_endpoint` tới sau lúc người ta thật sự ngừng
+nói khoảng 0.65-0.71s, tức là rơi gọn vào khoảng lặng giữa hai câu.
+
+**Nhịp gửi lấy theo đồng hồ AudioContext, không phải `setTimeout`.** Sai số
+vài phần trăm mỗi nhịp của `setTimeout` cộng dồn thành cả giây sau 20 giây,
+làm cái nghe được lệch hẳn với cái đã gửi lên server — dừng sẽ dừng sai chỗ.
+
+Bỏ tick thì phát liền mạch. Lúc đó bản dịch câu trước sẽ đọc chồng lên câu
+sau đang phát, vì độ trễ đầu-cuối (~5.8s) dài hơn khoảng cách giữa hai câu.
 
 Chiều dịch suy từ ngôn ngữ Whisper nhận diện, không cần bấm nút:
 
@@ -102,17 +107,12 @@ nói tiếng Nhật thì chiều ngược dịch sang tiếng Nhật.
 Câu ngắn ("Yes.", "Ừ.") thì Whisper hay nhận nhầm ngôn ngữ, nên khi không chắc
 hệ thống **giữ chiều của lượt trước** thay vì đoán bừa.
 
-Client cắt được đúng đoạn audio gốc nhờ trường `start_s` trong `stt_final`:
-server đếm vị trí câu trên chính dòng byte mà client gửi, nên hai bên khớp
-tuyệt đối. Đo trên file 3 câu: `start_s` = 0.416 / 3.552 / 7.104s, khớp đúng
-cách ghép file (0.4 / 3.5 / 7.0s).
-
 Ở chế độ này client đặt server sang **`set_tts_mode: manual`** — server không
-tự đọc gì, client quyết thứ tự. Nếu để server tự đọc theo §2.4.1 thì bản dịch
-sẽ phát *trước cả* âm thanh gốc, vì streaming TTS bắt đầu ngay khi có câu đầu.
+tự đọc gì, client quyết khi nào đọc. Nếu để server tự đọc theo §2.4.1 thì nó
+bắt đầu đọc ngay khi có câu dịch đầu tiên, không đợi file dừng.
 
 Nút **"Tạm dừng"** cho bạn kiểm soát tay bất cứ lúc nào. Bấm "Tiếp tục" sẽ hủy
-chuỗi nghe lại đang dở và phát tiếp ngay.
+lượt đọc đang dở và phát tiếp ngay.
 
 Tốc độ đọc chiều ngược chỉnh bằng `tts.coach_length_scale` (mặc định 1.35 —
 số càng lớn càng chậm).
