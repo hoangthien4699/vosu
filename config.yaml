@@ -102,9 +102,15 @@ stt:
   # thì người dùng nhận bản dịch của MỘT MẢNH câu; giữ nhầm câu trọn thì chỉ
   # chậm thêm một nhịp rồi vẫn ra đúng.
   merge_incomplete: true
-  # Chờ ngần này rồi không ai nói tiếp thì dịch nguyên câu dở — người ta có
-  # quyền bỏ lửng câu, giữ mãi là mất hẳn câu đó.
+  # Chờ nghe thêm ngần này (ĐỒNG HỒ AUDIO, không phải đồng hồ thật) mà không
+  # ai nói tiếp thì dịch nguyên câu dở — người ta có quyền bỏ lửng câu.
+  #
+  # Phải đo bằng đồng hồ audio: chế độ dừng-từng-câu dừng file ngay tại
+  # endpoint, nên trong lúc chờ KHÔNG có audio nào chạy. Đo bằng đồng hồ thật
+  # thì cửa sổ tự hết giờ và câu không bao giờ được ghép.
   merge_window_ms: 1200
+  # Backstop bằng đồng hồ thật, phòng khi client ngừng gửi audio hẳn.
+  merge_backstop_s: 15.0
   # Chặn heuristic đọc sai liên tục làm câu dài vô hạn.
   max_merges: 2
   max_merged_s: 20.0
