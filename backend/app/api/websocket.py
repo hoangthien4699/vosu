@@ -34,6 +34,7 @@ from ..ai.direction import resolve as resolve_direction
 from ..ai.history import ConversationHistory
 from ..ai.llm import GenerationStats
 from ..ai.tts import PiperTts, SentenceSplitter, TtsUnavailable
+from ..ai.verify import failure_reason, retry_hint
 from ..audio.chunker import AudioChunker, AudioSegment
 from ..audio.session import SessionState, UtteranceState
 from ..audio.vad import VadEvent, VadEventType, build_vad
@@ -387,6 +388,11 @@ class CopilotSession:
             },
         )
 
+        target_language = (
+            self._counterpart_language
+            if direction.is_outbound
+            else self.config.session.user_language
+        )
         parser = SemanticEventParser()
         stats = GenerationStats()
         splitter = SentenceSplitter(self.config.tts.min_sentence_chars)
@@ -413,6 +419,22 @@ class CopilotSession:
 
         for event in parser.finish():
             await self._emit_semantic(utterance_id, event, utterance, splitter)
+
+        # Lưới an toàn: model 2B thỉnh thoảng chép nguyên văn thay vì dịch.
+        # Dịch lại MỘT lần — lần hai còn hỏng thì lần ba cũng thế.
+        if self.config.llm.retry_on_bad_translation:
+            reason = failure_reason(
+                transcript.text, parser.result.translation, target_language
+            )
+            if reason is not None:
+                logger.info(
+                    "%s: bản dịch hỏng (%s) — dịch lại một lần",
+                    self.session_id, reason,
+                )
+                parser = await self._retranslate(
+                    utterance_id, utterance, transcript, direction,
+                    context, target_language, reason, stats,
+                )
 
         self.history.set_translation(utterance_id, parser.result.translation)
 
@@ -441,6 +463,43 @@ class CopilotSession:
             else:
                 with contextlib.suppress(Exception):
                     self.state.transition(utterance_id, UtteranceState.DONE)
+
+    async def _retranslate(
+        self, utterance_id, utterance, transcript, direction,
+        context, target_language, reason, stats,
+    ) -> SemanticEventParser:
+        """Dịch lại với lời nhắc cứng hơn. Trả về parser của lần dịch mới.
+
+        TTS của lần đầu (nếu có) đã bị hủy trước khi đọc bản hỏng — không để
+        người dùng nghe câu tiếng mình đọc bằng giọng nước ngoài.
+        """
+        from ..ai.llm import language_name
+
+        if self.tts is not None and self.tts.is_active:
+            self._drain_tts_queue()
+            await self.tts.cancel(reason="new_utterance")
+
+        prompt = self.runtime.llm.build_prompt(
+            transcript.text,
+            transcript.language,
+            direction=direction,
+            counterpart_language=self._counterpart_language,
+            history=context,
+            retry_hint=retry_hint(reason, language_name(target_language)),
+        )
+        parser = SemanticEventParser()
+        splitter = SentenceSplitter(self.config.tts.min_sentence_chars)
+        async with self.runtime.job("llm_retry"):
+            async for token in self.runtime.llm.stream(prompt, stats=stats):
+                for event in parser.feed(token):
+                    await self._emit_semantic(utterance_id, event, utterance, splitter)
+        for event in parser.finish():
+            await self._emit_semantic(utterance_id, event, utterance, splitter)
+
+        remainder = splitter.flush()
+        if remainder and self._should_speak("translation"):
+            self._speak_translation(utterance_id, remainder)
+        return parser
 
     async def _emit_semantic(self, utterance_id, event, utterance, splitter) -> None:
         if not isinstance(event, TranslationDelta):

@@ -307,6 +307,69 @@ thì model suy nghĩ dài dòng, mà với dịch câu ngắn đó là latency t
 `--swa-full` chỉ cần cho Gemma (sliding-window attention); với Qwen nó là
 no-op, giữ bật để đổi model không phải nhớ đổi cờ.
 
+### Ngưỡng chốt câu: 900ms, không phải 400ms
+
+§7 đề xuất 300-500ms, nhưng đó là cho mô hình "gợi ý phản xạ" của bản gốc. Sản
+phẩm giờ là phiên dịch, và hai loại lỗi **không ngang nhau**: cắt nhầm giữa câu
+cho ra bản dịch của một *mảnh* câu — sai hẳn nghĩa; gộp hai câu thì nội dung
+vẫn đúng, chỉ là khối dài hơn.
+
+Đo thật với Silero VAD, giọng 110-145 wpm:
+
+| ngưỡng | cắt nhầm giữa câu | gộp nhầm hai câu |
+|---|---|---|
+| 400ms | **4** | 0 |
+| 600ms | 3 | 0 |
+| 800ms | 2 | 1 |
+| **900ms** | **1** | **1** |
+| 1000ms | 0 | 2 |
+
+Ở 400ms, chỉ cần ngừng giữa câu 500ms là bị cắt đôi và người nói chậm có ngập
+ngừng bị cắt làm ba. Ở 900ms chỉ còn gộp nhầm khi hai câu cách nhau 400ms —
+khoảng đó ngắn bất thường trong hội thoại thật.
+
+Đánh đổi: **+500ms vào E2E** mỗi câu. Chỉnh bằng `vad.min_silence_ms`.
+
+### Độ trung thực của bản dịch
+
+`benchmarks/fidelity.py` đo được thứ mà "nghe có tự nhiên không" thì không: mỗi
+câu thử đi kèm danh sách yếu tố **bắt buộc phải còn** — con số, phủ định, từ
+giảm nhẹ, tên riêng, mốc giờ.
+
+```bash
+python -m benchmarks.fidelity
+```
+
+Ba thay đổi, đo trên 12 câu / 35 yếu tố:
+
+| | Yếu tố giữ được | Câu thiếu ý |
+|---|---|---|
+| Prompt ưu tiên "tự nhiên, không word-for-word" | 28/35 (80%) | 5/12 |
+| Prompt ưu tiên **trung thực**, temp 0.1, chống chép | **31/35 (89%)** | **4/12** |
+
+Prompt cũ nói *"Natural spoken Vietnamese, **not word-for-word**"* — chính câu
+đó cho phép model lược bớt. Giờ độ chính xác là quy tắc số 1 và "nghe tự nhiên"
+là quy tắc số 6, trong ràng buộc của 5 quy tắc trên.
+
+#### Lưới an toàn: dịch lại khi phát hiện hỏng
+
+Model 2B thỉnh thoảng **chép nguyên văn** thay vì dịch — tái hiện được, không
+phụ thuộc temperature hay grammar:
+
+```
+nguồn     Chị cho em hỏi thêm một chút về giá.
+bản dịch  Chị cho em hỏi thêm một chút về giá.
+```
+
+Người dùng nghe câu tiếng Việt của chính mình đọc bằng giọng Anh thì vô dụng.
+`ai/verify.py` phát hiện (chép nguyên văn / sai ngôn ngữ / rỗng) và dịch lại
+**một lần** với lời nhắc cứng hơn. Chỉ một lần: lần hai còn hỏng thì lần ba
+cũng thế. Tắt bằng `llm.retry_on_bad_translation`.
+
+Phát hiện cố ý **hẹp** — dịch lại tốn ~1 giây và làm bản dịch nhấp nháy, nên
+báo động giả đắt hơn bỏ sót. Dấu hiệu "vắng dấu tiếng Việt" chỉ tin theo một
+chiều, vì câu tiếng Việt ngắn có thể không dấu ("Ok", "Vâng").
+
 ### Bộ nhớ hội thoại
 
 §10 của đặc tả xếp context hẹp là "không phải blocker ở MVP" nhưng nói rõ phải

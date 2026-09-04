@@ -43,17 +43,26 @@ into {target}.
 Output ONE compact JSON object and nothing else:
 {{"translation":"..."}}
 
-Rules:
-- Write the translation entirely in {target}, with correct spelling and
-  diacritics. Never leave words in the source language, and never mix in
-  characters from a script {target} does not use.
-- Natural spoken {target}, not word-for-word.
-- Translate EVERYTHING they said, including short opening remarks. Do not drop
-  a sentence or summarise.
-- Read times, dates and numbers the way a person means them out loud: "by
-  three" is three o'clock, not the third day.
-- Keep WHO DOES WHAT exactly as they said it. Never swap who is asking and who
-  is offering.
+Accuracy comes first. A translation that reads beautifully but loses or
+changes what they said is a failure.
+
+Rules, in order of priority:
+1. Carry over EVERY element: each clause, every noun, number, date, name,
+   negation ("not", "won't"), and hedge ("probably", "might", "about"). If
+   they said two sentences, produce two sentences.
+2. Do not substitute, generalise, or invent. Translate the noun they actually
+   used — not a related one you think fits better. If you are unsure of a term,
+   render it plainly rather than guessing a fancier word.
+3. Leave nothing in the source language. Every word must be {target}, with
+   correct spelling and diacritics, and no characters from a script {target}
+   does not use.
+4. Keep WHO DOES WHAT exactly as they said it. Never swap who is asking and
+   who is offering.
+5. Read times, dates and numbers the way a person means them out loud: "by
+   three" is three o'clock, not the third day; "this afternoon" is the
+   afternoon, not the evening.
+6. Within those constraints, make it sound like natural spoken {target} rather
+   than written prose.
 - Translate only. Do not answer, explain, or add commentary.{history}"""
 
 _TO_COUNTERPART = """You are a live interpreter for a user wearing earbuds.
@@ -64,17 +73,26 @@ can say it out loud.
 Output ONE compact JSON object and nothing else:
 {{"translation":"..."}}
 
-Rules:
-- Write the translation entirely in {target}.
-- Natural spoken {target} that sounds right said out loud in a real
-  conversation — not stiff or literal, not written prose.
-- Keep WHO DOES WHAT exactly as the user said it. If the user is asking the
-  other person to do something, the translation must ask them too — never turn
-  a request into an offer, and never swap who helps whom.
-- Vietnamese pronouns like "anh", "em", "chị" mark politeness and who is
-  speaking to whom. Carry that relationship over; do not invert it.
-- Keep it about as long as what the user said. Do not add ideas they did not
-  say.
+Accuracy comes first. The user will say your translation out loud and be held
+to it, so it must carry exactly what they meant — no more, no less.
+
+Rules, in order of priority:
+1. Carry over EVERY element: each clause, every noun, number, date, name,
+   negation, and hedge. Do not compress two clauses into one.
+2. Do not add ideas the user did not say, and do not soften or strengthen what
+   they said.
+3. Keep WHO DOES WHAT exactly as the user said it. If the user is ASKING the
+   other person to do something, the translation must ask them too — never turn
+   a request into an offer, and never swap who helps whom.
+4. {source} pronouns like "anh", "em", "chị" mark politeness and who is
+   speaking to whom. Carry that relationship over; do not invert it.
+5. Write it entirely in {target}, and read times the way they were meant:
+   "chiều nay" is this afternoon, not tonight.
+6. Within those constraints, make it sound like something a person would
+   actually say out loud — not stiff, not written prose.
+
+NEVER copy the {source} sentence into the output. Even if the sentence is long
+or hard, produce {target}. Repeating the input unchanged is always wrong.
 - Translate only. Do not answer, explain, or add commentary.{history}"""
 
 _HISTORY_RULE = """
@@ -94,6 +112,7 @@ def system_prompt(
     user_language: str = "vi",
     counterpart_language: str | None = "en",
     history: str = "",
+    retry_hint: str = "",
 ) -> str:
     """Prompt hệ thống theo chiều dịch.
 
@@ -259,6 +278,7 @@ def build_prompt(
     user_language: str = "vi",
     counterpart_language: str | None = "en",
     history: str = "",
+        retry_hint: str = "",
 ) -> str:
     """Dựng prompt. Thứ tự các phần quyết định hiệu quả prefix cache:
 
@@ -273,6 +293,7 @@ def build_prompt(
         user_language=user_language,
         counterpart_language=counterpart_language,
         history=history,
+            retry_hint=retry_hint,
     )
     speaker = "You" if direction is Direction.TO_COUNTERPART else "Them"
     # Phân định thật rõ câu cần dịch với khối lịch sử. Model 2B đã từng dịch
@@ -282,6 +303,10 @@ def build_prompt(
         f"TRANSLATE EXACTLY THIS ONE LINE, nothing else.\n"
         f"{speaker} said: {text}"
     )
+    if retry_hint:
+        # Lần dịch lại: lời nhắc nằm SAU câu cần dịch để nó là thứ model
+        # đọc cuối cùng trước khi sinh.
+        user = f"{user}\n\n{retry_hint}"
     return template.render(system, user)
 
 

@@ -57,9 +57,10 @@ class FakeLlm:
         self.prompts: list[str] = []
         self.histories: list[str] = []
         self.directions: list = []
+        self.retry_hints: list[str] = []
 
     def build_prompt(self, text, language, *, direction=None, counterpart_language=None,
-                     history=""):
+                     history="", retry_hint=""):
         from app.ai.direction import Direction
 
         direction = direction or Direction.TO_USER
@@ -72,6 +73,7 @@ class FakeLlm:
         self.prompts.append(prompt)
         self.histories.append(history)
         self.directions.append(direction)
+        self.retry_hints.append(retry_hint)
         return prompt
 
     async def stream(self, prompt, *, stats=None, n_predict=None):
@@ -683,3 +685,86 @@ def test_ngon_ngu_doi_phuong_lay_theo_thuc_te_nghe_duoc(client):
         prompt = client.app.state.runtime.llm.prompts[-1]
 
     assert "into Japanese" in prompt, "không bám theo ngôn ngữ thật của đối phương"
+
+
+# --------------------------------------------------------------------------- #
+# Dịch lại khi bản dịch hỏng
+# --------------------------------------------------------------------------- #
+
+class EchoLlm(FakeLlm):
+    """Lần đầu chép nguyên văn, lần sau dịch đúng — mô phỏng lỗi thật của
+    model 2B (`"Chị cho em hỏi thêm một chút về giá."` bị trả lại y nguyên)."""
+
+    def __init__(self, source: str, good: str):
+        super().__init__(json.dumps({"translation": good}, ensure_ascii=False))
+        self.echo_output = json.dumps({"translation": source}, ensure_ascii=False)
+        self.good_output = self.output
+        self.calls = 0
+
+    async def stream(self, prompt, *, stats=None, n_predict=None):
+        self.calls += 1
+        self.output = self.echo_output if self.calls == 1 else self.good_output
+        async for token in super().stream(prompt, stats=stats, n_predict=n_predict):
+            yield token
+
+
+def test_chep_nguyen_van_thi_dich_lai_mot_lan(client):
+    source = "Chị cho em hỏi thêm một chút về giá."
+    client.app.state.runtime.stt = FakeStt("vi", source)
+    client.app.state.runtime.llm = EchoLlm(source, "Can I ask a bit more about the pricing?")
+
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        events = send_utterance(ws)
+
+    llm = client.app.state.runtime.llm
+    assert llm.calls == 2, f"không dịch lại (gọi {llm.calls} lần)"
+    assert any("repeated the input" in h for h in llm.retry_hints), llm.retry_hints
+
+    final = [e for e in events if e["type"] == "translation_delta"][-1]
+    assert final["data"]["full"] == "Can I ask a bit more about the pricing?"
+
+
+def test_ban_dich_tot_thi_khong_dich_lai(client):
+    """Dịch lại tốn ~1 giây — không được kích hoạt nhầm."""
+    client.app.state.runtime.stt = FakeStt("vi", "Tôi đồng ý.")
+    client.app.state.runtime.llm = FakeLlm(LLM_OUTPUT_EN)
+
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        send_utterance(ws)
+
+    llm = client.app.state.runtime.llm
+    assert llm.prompts and all(h == "" for h in llm.retry_hints), llm.retry_hints
+
+
+def test_chi_dich_lai_dung_mot_lan(client):
+    """Lần hai còn hỏng thì lần ba cũng thế — không lặp vô hạn."""
+    source = "Chị cho em hỏi thêm một chút về giá."
+    client.app.state.runtime.stt = FakeStt("vi", source)
+    # luôn chép, không bao giờ dịch đúng
+    client.app.state.runtime.llm = FakeLlm(
+        json.dumps({"translation": source}, ensure_ascii=False)
+    )
+
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        events = send_utterance(ws)
+
+    assert len(client.app.state.runtime.llm.prompts) == 2
+    assert any(e["type"] == "copilot_done" for e in events), "pipeline phải kết thúc"
+
+
+def test_tat_duoc_viec_dich_lai(client):
+    client.app.state.config.llm.retry_on_bad_translation = False
+    source = "Chị cho em hỏi thêm một chút về giá."
+    client.app.state.runtime.stt = FakeStt("vi", source)
+    client.app.state.runtime.llm = FakeLlm(
+        json.dumps({"translation": source}, ensure_ascii=False)
+    )
+
+    with client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        send_utterance(ws)
+
+    assert len(client.app.state.runtime.llm.prompts) == 1
