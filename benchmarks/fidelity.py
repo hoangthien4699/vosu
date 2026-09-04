@@ -1,7 +1,7 @@
 """Đo độ trung thực của bản dịch — bao nhiêu yếu tố bắt buộc còn sống sót.
 
     python -m benchmarks.fidelity
-    python -m benchmarks.fidelity --model models/gemma-3-4b-it-q4_k_m.gguf
+    python -m benchmarks.fidelity --model <đường-dẫn-gguf-khác>
 
 Không thay `compare_models` (so model với model) mà bổ sung cho nó: cái này đo
 MỘT cấu hình, dùng để biết một thay đổi prompt/tham số có làm bản dịch kĩ hơn
