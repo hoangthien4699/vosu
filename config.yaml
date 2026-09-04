@@ -26,7 +26,10 @@ paths:
 vad:
   backend: silero
   threshold: 0.5
-  min_silence_ms: 400        # §7 — cộng thẳng vào E2E, đừng hạ xuống 150ms
+  # Ngưỡng im lặng để chốt câu — CỘNG THẲNG vào E2E.
+  # Đo thật: 400ms cắt nhầm giữa câu 4 lần / gộp nhầm 0; 900ms là 1/1.
+  # Cắt nhầm tệ hơn gộp: nó cho ra bản dịch của một mảnh câu.
+  min_silence_ms: 900        # §7 — cộng thẳng vào E2E, đừng hạ xuống 150ms
   min_speech_ms: 200
 
 chunker:
@@ -42,8 +45,10 @@ llm:
   host: 127.0.0.1
   port: 8080
   n_ctx: 2048
-  n_predict: 96
-  temperature: 0.2
+  # Bản dịch KĨ dài hơn bản dịch lược.
+  n_predict: 160
+  # Dịch cần bám sát, không cần sáng tạo.
+  temperature: 0.1
   n_gpu_layers: null         # null -> DeviceProfile cuda = 36
   prompt_template: auto      # auto suy từ tên file GGUF
   # BẮT BUỘC với Gemma 3 (sliding-window attention): thiếu cờ này thì mỗi
@@ -53,6 +58,9 @@ llm:
   grammar: true
   # Chống lặp: model từng kẹt sinh `”}”}”}...` tới hết n_predict.
   repeat_penalty: 1.15
+  # Dịch lại một lần khi phát hiện bản dịch hỏng (chép nguyên văn / sai ngôn
+  # ngữ). Model 2B thỉnh thoảng chép thay vì dịch.
+  retry_on_bad_translation: true
   swa_full: true
   # Bộ nhớ hội thoại (§10). 0 = tắt, mỗi câu dịch biệt lập.
   history_turns: 6
