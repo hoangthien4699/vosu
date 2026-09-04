@@ -158,6 +158,20 @@ tts:
   enabled: true
   voice: vi
   auto_read_translation: true
+  # Cắt lời đang đọc khi nghe thấy tiếng nói mới (§2.4.1 Barge-in).
+  #
+  # MẶC ĐỊNH TẮT — sai lệch có chủ ý so với đặc tả. Barge-in dành cho tình
+  # huống NGƯỜI DÙNG nói đè lên bản đọc. Nhưng vòng lặp chính của sản phẩm này
+  # là NGHE ĐỐI PHƯƠNG, và với một mic thì tiếng nói mới thường là họ nói tiếp.
+  #
+  # Đo thật trên đoạn nói nhanh (nghỉ 0.9s giữa câu): 2 trong 6 bản dịch bị
+  # cắt, một câu bị cắt khi chưa đọc được chữ nào. Bật lại khi nguồn audio là
+  # mic của chính người dùng và bạn cần họ ngắt lời được; B8 vẫn đo được.
+  barge_in: false
+  # Số bản dịch tối đa xếp hàng chờ đọc. Đọc một câu mất ~2.5-3s; nếu người ta
+  # ra câu mới nhanh hơn thế thì phần đọc tụt lại mãi. Vượt hạn thì bỏ bản CŨ
+  # NHẤT (đã lạc hậu so với cuộc nói chuyện) và BÁO ra client.
+  max_pending_reads: 4
   stream_by_sentence: true
   realtime_pacing: true
 
