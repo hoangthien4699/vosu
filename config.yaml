@@ -14,7 +14,19 @@ paths:
   # STT chạy CPU. Đo trên M4: base ~640ms, small chậm hơn đáng kể. Với mục
   # đích phát triển, `base` giữ vòng lặp thử-sai ở mức chịu được.
   # Đổi sang `small` nếu cần đối chiếu chất lượng với bản CUDA.
-  whisper_model: base
+  # Đo WER trên 20 câu Anh/Việt (giọng máy, nên số tuyệt đối là LẠC QUAN;
+  # chỉ dùng để so cấu hình). `base` nghe nhầm đúng kiểu người dùng phàn nàn:
+  # "giảm giá"->"giảm giả", "thanh toán"->"thang tòa án", "bàn giao"->"bàn dào".
+  #
+  #   SNR       base    small
+  #   sạch      5.3%     1.1%
+  #   20dB      9.1%     1.1%     <- phòng họp bình thường
+  #   10dB     14.4%     8.0%
+  #    5dB     27.8%    16.6%
+  #
+  # Đổi lại chậm hơn ~1.1s mỗi câu trên CPU Mac. Nghe nhầm một từ khoá rồi
+  # dịch sai hẳn nghĩa tệ hơn nhiều so với chậm thêm một giây.
+  whisper_model: small
   # Qwen3.5-4B Q4_K_M. Bản 2B dịch thiếu ý và đảo nghĩa; 4B đo được 100% yếu
   # tố giữ lại so với 94%, và 0 câu đảo nghĩa. Đổi lại chậm hơn ~2-3 lần và
   # nặng thêm ~790MB.
@@ -73,8 +85,18 @@ chunker:
   enable_partial: false
 
 stt:
+  # beam 5 gần như không hơn: 8.0% -> 7.5% ở 10dB, đổi lấy +180ms. Không đáng.
   beam_size: 1
+  # null = Whisper tự nhận diện ngôn ngữ, cần cho việc xác định chiều dịch.
+  #
+  # Ghim sẵn ngôn ngữ thì nhanh gần gấp đôi (1094ms so với 2045ms) vì khỏi
+  # chạy encoder lượt thứ hai, nhưng ta không biết trước ai sắp nói.
+  # Đã thử dùng model `tiny` dò ngôn ngữ trước rồi ghim cho `small`
+  # (1198ms, nhanh hơn 560ms): bỏ, vì có nhiễu thì tiny dò đúng 95% còn
+  # small 100% — cứ 20 câu sai ngôn ngữ 1 câu là hỏng nguyên câu đó.
   language: null
+  # Đo trên Mac 10 nhân: mặc định 2093ms/câu, 8 luồng 1704ms.
+  cpu_threads: 8
 
 llm:
   host: 127.0.0.1

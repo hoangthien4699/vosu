@@ -48,6 +48,9 @@ class EventType(str, Enum):
     TTS_ERROR = "tts_error"
 
     # --- khác ---
+    #: Câu bị bỏ vì xử lý không kịp. Người dùng PHẢI biết mình vừa mất một câu,
+    #: chứ không phải im lặng như thể đối phương không nói gì.
+    UTTERANCE_DROPPED = "utterance_dropped"
     ERROR = "error"
 
 
@@ -67,6 +70,7 @@ UTTERANCE_SCOPED = frozenset(
         EventType.TTS_DONE,
         EventType.TTS_CANCELLED,
         EventType.TTS_ERROR,
+        EventType.UTTERANCE_DROPPED,
     }
 )
 

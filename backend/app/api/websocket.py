@@ -46,6 +46,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@dataclass(eq=False)  # AudioSegment chứa numpy — so sánh mặc định sẽ nổ
+class _PipelineItem:
+    """Một câu đang chờ tới lượt xử lý."""
+
+    segment: AudioSegment
+    utterance_id: str
+
+
+@dataclass(eq=False)
+class _LlmItem:
+    """Một câu đã nghe xong, đang chờ dịch."""
+
+    utterance_id: str
+    transcript: object
+    direction: Direction
+    target_language: str
+    counterpart_language: str
+    #: Lịch sử chốt tại thời điểm NGHE XONG. Chặng STT chạy trước chặng dịch,
+    #: nên nếu render lúc dịch thì prompt sẽ chứa cả những câu nói SAU câu này.
+    context: str
+
+
 @dataclass
 class _TtsItem:
     """Một mẩu cần đọc. `is_end` đánh dấu utterance đã hết phần cần đọc."""
@@ -135,7 +157,22 @@ class CopilotSession:
         )
 
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Các câu được XẾP HÀNG chứ không chiếm chỗ nhau. Trước đây câu mới
+        # hủy thẳng pipeline của câu cũ; khi các câu nối nhau sát hơn thời gian
+        # xử lý một câu thì câu cũ bị vứt lặng lẽ — người dùng mất hẳn câu đó
+        # mà log vẫn sạch. Đo thật với Whisper `small`: file ba câu chỉ ra
+        # bản dịch của câu CUỐI, hai câu đầu có transcript rồi biến mất.
+        self._pipeline_queue: asyncio.Queue[_PipelineItem | None] = asyncio.Queue()
+        self._pipeline_worker: asyncio.Task | None = None
         self._pipeline_task: asyncio.Task | None = None
+        # Chặng 2 chạy SONG SONG với chặng 1. Chúng dùng hai tài nguyên khác
+        # nhau — STT ăn CPU, LLM ăn GPU — nên xếp nối tiếp là phí: thông lượng
+        # tụt xuống tổng của hai chặng thay vì chặng chậm nhất. Đo thật khi còn
+        # nối tiếp, file 6 câu: độ trễ dồn 3.6s -> 6.5s, mỗi câu tụt thêm ~570ms
+        # và không có điểm dừng.
+        self._llm_queue: asyncio.Queue[_LlmItem | None] = asyncio.Queue()
+        self._llm_worker: asyncio.Task | None = None
+        self._llm_task: asyncio.Task | None = None
         self._partial_task: asyncio.Task | None = None
         # TTS chạy qua hàng đợi + worker riêng. Nếu await ngay trong vòng lặp
         # token của LLM thì token stream bị treo suốt lúc phát tiếng — đúng
@@ -155,6 +192,12 @@ class CopilotSession:
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
         sender = asyncio.create_task(self._sender_loop(), name=f"sender-{self.session_id}")
+        self._pipeline_worker = asyncio.create_task(
+            self._pipeline_worker_loop(), name=f"stt-{self.session_id}"
+        )
+        self._llm_worker = asyncio.create_task(
+            self._llm_worker_loop(), name=f"llm-{self.session_id}"
+        )
         if self.tts is not None:
             self._tts_worker = asyncio.create_task(
                 self._tts_worker_loop(), name=f"tts-{self.session_id}"
@@ -295,20 +338,96 @@ class CopilotSession:
     # -- pipeline chính --------------------------------------------------- #
 
     async def _start_pipeline(self, segment: AudioSegment) -> None:
-        # Utterance mới chiếm chỗ utterance cũ: hủy pipeline cũ, hủy TTS cũ.
-        if self._pipeline_task is not None and not self._pipeline_task.done():
-            self._pipeline_task.cancel()
+        """Xếp câu vừa dứt vào hàng đợi. KHÔNG hủy câu đang xử lý.
+
+        Bản dịch là sản phẩm chính: mất một câu thì người dùng không bao giờ
+        biết đối phương vừa nói gì. Chậm một nhịp còn chữa được, mất thì không.
+        """
+        # Partial của câu cũ thì bỏ được — nó chỉ là bản nháp trên màn hình.
         if self._partial_task is not None and not self._partial_task.done():
             self._partial_task.cancel()
-        # Utterance mới chiếm chỗ: mọi thứ còn chờ đọc của câu cũ không còn
-        # ý nghĩa — hội thoại đã đi tiếp.
-        self._drain_tts_queue()
 
         utterance = self.state.begin_utterance()
         utterance.mark_endpoint()
-        self._pipeline_task = asyncio.create_task(
-            self._run_pipeline(segment, utterance.id), name=f"pipeline-{utterance.id}"
-        )
+
+        # Nếu tụt lại quá xa thì bản dịch cũ đã lỗi thời so với cuộc nói
+        # chuyện đang diễn ra — bỏ câu CŨ NHẤT để bám sát thời gian thực,
+        # và nói rõ ra chứ không im lặng.
+        limit = self.config.session.max_pending_utterances
+        while self._pipeline_queue.qsize() >= limit:
+            try:
+                stale = self._pipeline_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            self._pipeline_queue.task_done()
+            if stale is None:
+                continue
+            logger.warning(
+                "%s: xử lý không kịp, bỏ câu %s (hàng đợi đã %d)",
+                self.session_id, stale.utterance_id, limit,
+            )
+            await self.bus.emit(
+                EventType.UTTERANCE_DROPPED,
+                utterance_id=stale.utterance_id,
+                data={"reason": "backlog", "pending": limit},
+            )
+
+        self._pipeline_queue.put_nowait(_PipelineItem(segment, utterance.id))
+
+    async def _pipeline_worker_loop(self) -> None:
+        """Chạy từng câu một, đúng thứ tự nghe được.
+
+        Một câu một lúc là cố ý: STT và LLM đã tranh nhau CPU/GPU rồi, chạy
+        chồng chỉ làm cả hai cùng chậm.
+        """
+        while True:
+            item = await self._pipeline_queue.get()
+            try:
+                if item is None:
+                    return
+                # Task riêng cho từng câu: `reset` phải hủy được câu đang chạy
+                # mà KHÔNG giết worker, nếu không thì sau reset không câu nào
+                # được xử lý nữa. `asyncio.wait` chờ xong mà không ném lại lỗi
+                # của task con, nên hủy câu và hủy worker phân biệt được nhau.
+                task = asyncio.create_task(
+                    self._run_pipeline(item.segment, item.utterance_id),
+                    name=f"utt-{item.utterance_id}",
+                )
+                self._pipeline_task = task
+                try:
+                    await asyncio.wait({task})
+                except asyncio.CancelledError:
+                    task.cancel()
+                    raise
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("%s: pipeline worker lỗi", self.session_id)
+            finally:
+                self._pipeline_queue.task_done()
+
+    @staticmethod
+    def _drain(queue: asyncio.Queue) -> int:
+        dropped = 0
+        while True:
+            try:
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return dropped
+            queue.task_done()
+            if item is not None:
+                dropped += 1
+
+    def _drain_pipeline_queue(self) -> int:
+        """Bỏ mọi câu còn chờ ở cả hai chặng. Dùng khi reset/kết thúc session."""
+        return self._drain(self._pipeline_queue) + self._drain(self._llm_queue)
+
+    def _abort_in_flight(self) -> None:
+        """Vứt hết việc đang làm nhưng GIỮ worker sống, để còn nhận câu mới."""
+        self._drain_pipeline_queue()
+        for task in (self._pipeline_task, self._llm_task, self._partial_task):
+            if task is not None and not task.done():
+                task.cancel()
 
     async def _run_pipeline(self, segment: AudioSegment, utterance_id: str) -> None:
         try:
@@ -376,7 +495,68 @@ class CopilotSession:
             },
         )
 
-        # --- LLM streaming -> semantic events ---
+        # Hết chặng NGHE. Chuyển sang hàng đợi DỊCH và quay lại nghe câu kế
+        # tiếp ngay — không đứng chờ LLM.
+        target_language = (
+            self._counterpart_language
+            if direction.is_outbound
+            else self.config.session.user_language
+        )
+        # Loại chính câu này khỏi lịch sử: nó đã nằm ở phần "Now they said"
+        # của prompt, đưa vào hai lần sẽ khiến model tưởng bị nói lặp.
+        #
+        # Chốt lịch sử NGAY BÂY GIỜ chứ không lúc dịch: chặng nghe chạy trước
+        # chặng dịch, nên nếu render lúc dịch thì prompt của câu này sẽ chứa
+        # cả những câu được nói SAU nó.
+        context = (
+            self.history.render(exclude=utterance_id)
+            if self.config.llm.history_turns > 0
+            else ""
+        )
+        self._llm_queue.put_nowait(
+            _LlmItem(
+                utterance_id=utterance_id,
+                transcript=transcript,
+                direction=direction,
+                target_language=target_language,
+                counterpart_language=self._counterpart_language,
+                context=context,
+            )
+        )
+
+    async def _llm_worker_loop(self) -> None:
+        """Chặng 2: dịch. Chạy song song với chặng nghe."""
+        while True:
+            item = await self._llm_queue.get()
+            try:
+                if item is None:
+                    return
+                task = asyncio.create_task(
+                    self._respond(item), name=f"llm-{item.utterance_id}"
+                )
+                self._llm_task = task
+                try:
+                    await asyncio.wait({task})
+                except asyncio.CancelledError:
+                    task.cancel()
+                    raise
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("%s: llm worker lỗi", self.session_id)
+            finally:
+                self._llm_queue.task_done()
+
+    async def _respond(self, item: _LlmItem) -> None:
+        utterance_id = item.utterance_id
+        utterance = self.state.get(utterance_id)
+        if utterance is None or utterance.is_terminal:
+            return
+        transcript = item.transcript
+        direction = item.direction
+        target_language = item.target_language
+        context = item.context
+
         self.state.transition(utterance_id, UtteranceState.COPILOT)
         await self.bus.emit(
             EventType.COPILOT_STARTED,
@@ -388,26 +568,14 @@ class CopilotSession:
             },
         )
 
-        target_language = (
-            self._counterpart_language
-            if direction.is_outbound
-            else self.config.session.user_language
-        )
         parser = SemanticEventParser()
         stats = GenerationStats()
         splitter = SentenceSplitter(self.config.tts.min_sentence_chars)
-        # Loại chính câu này khỏi lịch sử: nó đã nằm ở phần "Now they said"
-        # của prompt, đưa vào hai lần sẽ khiến model tưởng bị nói lặp.
-        context = (
-            self.history.render(exclude=utterance_id)
-            if self.config.llm.history_turns > 0
-            else ""
-        )
         prompt = self.runtime.llm.build_prompt(
             transcript.text,
             transcript.language,
             direction=direction,
-            counterpart_language=self._counterpart_language,
+            counterpart_language=item.counterpart_language,
             history=context,
         )
 
@@ -415,10 +583,10 @@ class CopilotSession:
             token_stream = self.runtime.llm.stream(prompt, stats=stats)
             async for token in token_stream:
                 for event in parser.feed(token):
-                    await self._emit_semantic(utterance_id, event, utterance, splitter)
+                    await self._emit_semantic(utterance_id, event, utterance, splitter, item)
 
         for event in parser.finish():
-            await self._emit_semantic(utterance_id, event, utterance, splitter)
+            await self._emit_semantic(utterance_id, event, utterance, splitter, item)
 
         # Lưới an toàn: model 2B thỉnh thoảng chép nguyên văn thay vì dịch.
         # Dịch lại MỘT lần — lần hai còn hỏng thì lần ba cũng thế.
@@ -431,10 +599,7 @@ class CopilotSession:
                     "%s: bản dịch hỏng (%s) — dịch lại một lần",
                     self.session_id, reason,
                 )
-                parser = await self._retranslate(
-                    utterance_id, utterance, transcript, direction,
-                    context, target_language, reason, stats,
-                )
+                parser = await self._retranslate(item, utterance, reason, stats)
 
         self.history.set_translation(utterance_id, parser.result.translation)
 
@@ -452,7 +617,7 @@ class CopilotSession:
         # --- TTS phần translation còn lại ---
         remainder = splitter.flush()
         if remainder and self._should_speak("translation"):
-            self._speak_translation(utterance_id, remainder)
+            self._speak_translation(utterance_id, remainder, item)
 
         # Utterance chỉ DONE sau khi worker đọc hết phần đã xếp hàng. Nếu
         # chuyển DONE ngay ở đây thì các mẩu còn trong hàng đợi sẽ bị worker
@@ -465,8 +630,7 @@ class CopilotSession:
                     self.state.transition(utterance_id, UtteranceState.DONE)
 
     async def _retranslate(
-        self, utterance_id, utterance, transcript, direction,
-        context, target_language, reason, stats,
+        self, item: _LlmItem, utterance, reason, stats,
     ) -> SemanticEventParser:
         """Dịch lại với lời nhắc cứng hơn. Trả về parser của lần dịch mới.
 
@@ -475,42 +639,46 @@ class CopilotSession:
         """
         from ..ai.llm import language_name
 
+        utterance_id = item.utterance_id
         if self.tts is not None and self.tts.is_active:
             self._drain_tts_queue()
-            await self.tts.cancel(reason="new_utterance")
+            await self.tts.cancel(reason="bad_translation")
 
         prompt = self.runtime.llm.build_prompt(
-            transcript.text,
-            transcript.language,
-            direction=direction,
-            counterpart_language=self._counterpart_language,
-            history=context,
-            retry_hint=retry_hint(reason, language_name(target_language)),
+            item.transcript.text,
+            item.transcript.language,
+            direction=item.direction,
+            counterpart_language=item.counterpart_language,
+            history=item.context,
+            retry_hint=retry_hint(reason, language_name(item.target_language)),
         )
         parser = SemanticEventParser()
         splitter = SentenceSplitter(self.config.tts.min_sentence_chars)
         async with self.runtime.job("llm_retry"):
             async for token in self.runtime.llm.stream(prompt, stats=stats):
                 for event in parser.feed(token):
-                    await self._emit_semantic(utterance_id, event, utterance, splitter)
+                    await self._emit_semantic(utterance_id, event, utterance, splitter, item)
         for event in parser.finish():
-            await self._emit_semantic(utterance_id, event, utterance, splitter)
+            await self._emit_semantic(utterance_id, event, utterance, splitter, item)
 
         remainder = splitter.flush()
         if remainder and self._should_speak("translation"):
-            self._speak_translation(utterance_id, remainder)
+            self._speak_translation(utterance_id, remainder, item)
         return parser
 
-    async def _emit_semantic(self, utterance_id, event, utterance, splitter) -> None:
+    async def _emit_semantic(
+        self, utterance_id, event, utterance, splitter, item: _LlmItem
+    ) -> None:
+        """`item` mang chiều dịch của ĐÚNG câu này.
+
+        Không được đọc `self._last_direction`: chặng nghe chạy trước chặng dịch
+        nên biến đó đã thuộc về một câu nói sau — giọng đọc và tốc độ sẽ sai.
+        """
         if not isinstance(event, TranslationDelta):
             return
 
-        direction = self._last_direction
-        target = (
-            self._counterpart_language
-            if direction.is_outbound
-            else self.config.session.user_language
-        )
+        direction = item.direction
+        target = item.target_language
         utterance.mark_first_useful()
         await self.bus.emit(
             EventType.TRANSLATION_DELTA,
@@ -527,9 +695,9 @@ class CopilotSession:
         # câu hoàn chỉnh, không đợi cả JSON.
         if self._should_speak("translation") and self.config.tts.stream_by_sentence:
             for sentence in splitter.feed(event.text):
-                self._speak_translation(utterance_id, sentence)
+                self._speak_translation(utterance_id, sentence, item)
 
-    def _speak_translation(self, utterance_id: str, text: str) -> None:
+    def _speak_translation(self, utterance_id: str, text: str, item: _LlmItem) -> None:
         """Đọc bản dịch, đúng giọng và đúng tốc độ cho chiều hiện tại.
 
         Dọn rác NGAY TẠI ĐÂY chứ không dựa vào việc `result.translation` đã
@@ -543,15 +711,15 @@ class CopilotSession:
             # Mẩu chỉ toàn dấu và ký tự cấu trúc — không có gì để đọc.
             return
 
-        direction = self._last_direction
-        if direction.is_outbound:
+        # Chiều của ĐÚNG câu này, không phải chiều của câu đang nghe dở.
+        if item.direction.is_outbound:
             # Người dùng phải NÓI THEO, không chỉ nghe hiểu — đọc chậm hẳn và
             # bằng giọng của tiếng đối phương.
             self._speak(
                 utterance_id,
                 text,
                 field="coach",
-                voice=self._voice_for(self._counterpart_language),
+                voice=self._voice_for(item.counterpart_language),
                 length_scale=self.config.tts.coach_length_scale,
             )
         else:
@@ -772,9 +940,13 @@ class CopilotSession:
             return
 
         if control.action == "reset":
-            await self._cancel_all_work()
+            if self.tts is not None:
+                await self.tts.cancel(reason="reset")
+            self._drain_tts_queue()
+            self._abort_in_flight()
             self.chunker.reset()
             self.history.clear()
+            self.state.cancel_all_active()
 
     # -- dọn dẹp ---------------------------------------------------------- #
 
@@ -782,7 +954,9 @@ class CopilotSession:
         if self.tts is not None:
             await self.tts.cancel(reason="session_end")
         self._drain_tts_queue()
-        for task in (self._pipeline_task, self._partial_task, self._tts_current,
+        self._drain_pipeline_queue()
+        for task in (self._pipeline_worker, self._llm_worker, self._pipeline_task,
+                     self._llm_task, self._partial_task, self._tts_current,
                      self._tts_worker):
             if task is not None and not task.done():
                 task.cancel()

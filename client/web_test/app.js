@@ -291,6 +291,13 @@ function onEvent(event) {
       log(type, data.message);
       break;
 
+    case "utterance_dropped":
+      // Người dùng PHẢI biết mình vừa mất một câu — im lặng thì họ tưởng
+      // đối phương không nói gì.
+      setStatus("bỏ 1 câu do xử lý không kịp", "warn");
+      log(type, `bỏ câu ${uttId} (${data.reason}, hàng đợi ${data.pending})`);
+      break;
+
     case "error":
       log(type, `[${data.code}] ${data.message}`);
       if (!data.recoverable) setStatus("lỗi", "err");
