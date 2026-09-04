@@ -638,8 +638,30 @@ function beginUtteranceHold() {
   pausePlayback("đang chờ bản dịch câu này");
 }
 
+/** Đóng hẳn kết nối cũ RỒI mới mở cái mới.
+ *
+ * `ws.close()` chỉ là yêu cầu đóng — nó trả về ngay, còn server thì phải nhận
+ * được frame đóng mới giải phóng chỗ. Mở kết nối mới ngay sau đó là chạy đua
+ * với chính mình: server thấy hai kết nối và từ chối cái mới bằng
+ * "đã đạt giới hạn 1 session". Xảy ra mỗi lần chọn file thứ hai mà không tải
+ * lại trang.
+ */
+function closeSocket() {
+  const ws = state.ws;
+  state.ws = null;
+  if (!ws || ws.readyState === WebSocket.CLOSED) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => resolve();
+    ws.addEventListener("close", done, { once: true });
+    try { ws.close(); } catch { done(); }
+    // Không treo vĩnh viễn nếu frame đóng không bao giờ tới.
+    setTimeout(done, 3000);
+  });
+}
+
 async function streamFile(file) {
   if (state.running) stop();
+  await closeSocket();
   connect();
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("hết giờ chờ kết nối")), 8000);
