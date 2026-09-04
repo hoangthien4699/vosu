@@ -768,3 +768,45 @@ def test_tat_duoc_viec_dich_lai(client):
         send_utterance(ws)
 
     assert len(client.app.state.runtime.llm.prompts) == 1
+
+
+def test_tts_khong_doc_rac_cau_truc(tts_client):
+    """Người dùng NHÌN thấy bản dịch sạch nhưng NGHE thấy rác — bug thật.
+
+    `clean_value` chạy khi chuỗi JSON đóng, còn các mẩu câu đi tới TTS được
+    cắt ra TRONG LÚC token còn đang về. Không dọn ở tầng TTS thì phần đuôi
+    `},{` được đọc thành tiếng.
+    """
+    tts_client.app.state.runtime.llm = FakeLlm(
+        '{"translation":"Tôi nghĩ chúng ta nên hoãn lại việc này.},{"}'
+    )
+    spoken = []
+    with tts_client.websocket_connect("/ws/copilot") as ws:
+        ws.receive()
+        payload = utterance_stream()
+        for i in range(0, len(payload), 3200):
+            ws.send_bytes(payload[i : i + 3200])
+        for _ in range(600):
+            message = ws.receive()
+            if not message.get("text"):
+                continue
+            event = json.loads(message["text"])
+            if event["type"] == "tts_started":
+                spoken.append(event["data"]["text"])
+            if event["type"] == "tts_done":
+                break
+
+    assert spoken, "không đọc gì cả"
+    for text in spoken:
+        for junk in ("},{", "}", "{", "[", "]"):
+            assert junk not in text, f"TTS đọc cả rác: {text!r}"
+
+
+def test_tts_bo_qua_mau_khong_co_chu(tts_client):
+    """Mẩu chỉ toàn dấu thì không có gì để đọc — đừng khởi động Piper cho nó."""
+    from app.api.websocket import CopilotSession
+
+    import inspect
+    source = inspect.getsource(CopilotSession._speak_translation)
+    assert "isalnum" in source, "không có rào chắn cho mẩu rỗng nghĩa"
+    assert "clean_value" in source
