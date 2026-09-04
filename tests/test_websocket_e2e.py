@@ -569,7 +569,7 @@ def test_lich_su_khong_chua_chinh_cau_dang_hoi(client):
         send_utterance(ws)
         prompt = client.app.state.runtime.llm.prompts[-1]
 
-    marker = "Them said:"
+    marker = "TRANSLATE EXACTLY THIS ONE LINE"
     assert prompt.count(marker) == 1
     before, _after = prompt.split(marker)
     # Lịch sử ghi bản dịch còn phần hỏi ghi nguyên văn, nên câu hiện tại chỉ

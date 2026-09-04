@@ -15,11 +15,14 @@ paths:
   # đích phát triển, `base` giữ vòng lặp thử-sai ở mức chịu được.
   # Đổi sang `small` nếu cần đối chiếu chất lượng với bản CUDA.
   whisper_model: base
-  # Qwen3.5-2B Q8_0. Q8 chứ không phải Q4: model 2B nhỏ nên lượng tử hóa
-  # 4-bit làm hụt chất lượng dịch rõ hơn model lớn. File vẫn nhẹ hơn một model
-  # 4B nén Q4 (1.9GB so với 2.4GB), và trả lại ~500MB VRAM.
-  # Đổi model chỉ là đổi dòng này — prompt template tự nhận diện theo tên file.
-  llm_gguf: models/qwen3.5-2b-q8_0.gguf
+  # Qwen3.5-4B Q4_K_M. Bản 2B dịch thiếu ý và đảo nghĩa; 4B đo được 100% yếu
+  # tố giữ lại so với 94%, và 0 câu đảo nghĩa. Đổi lại chậm hơn ~2-3 lần và
+  # nặng thêm ~790MB.
+  #
+  # CẢNH BÁO CHO BUILD CUDA: RSS 2830MB. Cộng Whisper `small` (~1.8GB) + KV
+  # (~0.5GB) + CUDA overhead (~0.8GB) = ~5.9GB, VƯỢT trần 5.5GB của §3.1.
+  # Muốn dùng 4B trên GPU 6GB thì phải hạ `whisper_model` xuống `base`.
+  llm_gguf: models/qwen3.5-4b-q4_k_m.gguf
   # brew install llama.cpp, rồi scripts/download_models.sh tự liên kết vào đây
   llama_server_bin: models/llama-server
   # Homebrew KHÔNG có formula `piper` — cài bằng `pip install piper-tts`,
