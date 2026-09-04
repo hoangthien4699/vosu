@@ -79,11 +79,15 @@ class SttEngine:
             device.stt_device,
             device.stt_compute_type,
         )
+        kwargs = {}
+        if self._config.stt.cpu_threads:
+            kwargs["cpu_threads"] = self._config.stt.cpu_threads
         self._model = WhisperModel(
             self._config.paths.whisper_model,
             device=device.stt_device,
             device_index=device.stt_device_index,
             compute_type=device.stt_compute_type,
+            **kwargs,
         )
         self._load_ms = (time.perf_counter() - started) * 1000.0
         logger.info("Whisper sẵn sàng sau %.0fms", self._load_ms)

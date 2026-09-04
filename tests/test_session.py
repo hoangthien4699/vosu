@@ -44,8 +44,20 @@ def test_khong_the_hoi_sinh_utterance_da_ket_thuc():
         s.transition(u.id, UtteranceState.TRANSCRIBING)
 
 
-def test_utterance_moi_huy_utterance_dang_chay():
-    """Kịch bản Barge-in §2.4.1: người đối diện nói tiếp khi TTS đang phát."""
+def test_utterance_moi_khong_huy_utterance_dang_chay():
+    """Câu mới KHÔNG được hủy câu đang xử lý dở.
+
+    Trước đây `begin_utterance` đánh dấu câu trước là CANCELLED. Vì các câu
+    được xếp hàng xử lý tuần tự, lúc câu thứ hai vừa dứt lời thì câu thứ nhất
+    mới đang dịch dở — nên nó bị hủy oan và mọi thứ hạ nguồn bỏ qua.
+
+    Đo thật: file 6 câu ra đủ 6 bản dịch trên màn hình nhưng chỉ HAI câu cuối
+    được đọc thành tiếng. Với tai nghe phiên dịch, không nghe được nghĩa là
+    mất hẳn câu đó.
+
+    Cắt lời khi người dùng nói đè lên là việc của Barge-in, không phải của hàm
+    mở utterance.
+    """
     s = SessionState("sess_x")
     a = s.begin_utterance()
     s.transition(a.id, UtteranceState.TRANSCRIBING)
@@ -54,9 +66,9 @@ def test_utterance_moi_huy_utterance_dang_chay():
 
     b = s.begin_utterance()
 
-    assert a.state is UtteranceState.CANCELLED
+    assert a.state is UtteranceState.SPEAKING, "câu đang đọc dở bị hủy oan"
     assert s.current is b
-    assert s.active() == [b]
+    assert s.active() == [a, b]
 
 
 def test_stt_rong_ket_thuc_som_van_hop_le():

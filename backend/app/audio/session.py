@@ -132,21 +132,22 @@ class SessionState:
     # -- thay đổi trạng thái ---------------------------------------------- #
 
     def begin_utterance(self) -> Utterance:
-        """Mở utterance mới. Utterance đang chạy (nếu có) bị đánh dấu CANCELLED.
+        """Mở utterance mới. Câu trước VẪN CHẠY TIẾP.
 
-        Một người chỉ nói một câu tại một thời điểm — utterance mới xuất hiện
-        nghĩa là câu trước đã bị chiếm chỗ. Việc hủy TTS tương ứng do
-        `ai/tts.py` xử lý qua tín hiệu Barge-in.
+        Trước đây câu mới đánh dấu câu trước là CANCELLED, với lý lẽ "một người
+        chỉ nói một câu tại một thời điểm nên câu mới chiếm chỗ câu cũ". Lý lẽ
+        đó sai với chính sản phẩm này: các câu được xếp hàng xử lý tuần tự, nên
+        lúc câu thứ hai vừa dứt lời thì câu thứ nhất mới đang dịch dở — đánh
+        dấu nó CANCELLED làm mọi thứ hạ nguồn bỏ qua nó.
+
+        Hậu quả đo được: file 6 câu ra đủ 6 bản dịch trên màn hình nhưng CHỈ
+        HAI câu cuối được đọc thành tiếng, vì worker TTS bỏ qua mọi mẩu thuộc
+        utterance đã kết thúc. Với tai nghe phiên dịch thì không nghe được câu
+        nào nghĩa là mất hẳn câu đó.
+
+        Việc cắt lời khi người dùng nói đè lên là chuyện của Barge-in
+        (`_on_vad_event`), không phải của hàm mở utterance.
         """
-        previous = self.current
-        if previous is not None and not previous.is_terminal:
-            logger.debug(
-                "Utterance %s bị chiếm chỗ ở trạng thái %s",
-                previous.id,
-                previous.state.value,
-            )
-            self.transition(previous.id, UtteranceState.CANCELLED)
-
         utterance = Utterance(id=f"utt_{next(self._counter):03d}")
         utterance.history.append((UtteranceState.LISTENING, time.monotonic()))
         self._utterances[utterance.id] = utterance
