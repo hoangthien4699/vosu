@@ -302,6 +302,9 @@ class CopilotSession:
             else:
                 self._start_partial(segment)
 
+        if self._held is not None:
+            await self._expire_hold_by_audio()
+
     def _on_vad_event(self, event: VadEvent) -> None:
         """Chạy đồng bộ trong lúc parse audio — phải cực nhẹ.
 
@@ -561,9 +564,60 @@ class CopilotSession:
                 "wait_ms": self.config.stt.merge_window_ms,
             },
         )
+        # Backstop bằng đồng hồ thật, đề phòng client ngừng gửi audio hẳn —
+        # lúc đó đồng hồ audio đứng yên và câu giữ lại sẽ kẹt mãi.
         self._hold_timer = asyncio.create_task(
-            self._flush_hold_after(utterance_id), name=f"hold-{utterance_id}"
+            self._flush_hold_after(utterance_id, self.config.stt.merge_backstop_s),
+            name=f"hold-{utterance_id}",
         )
+
+    async def _expire_hold_by_audio(self) -> None:
+        """Đã nghe thêm đủ lâu mà không ai nói tiếp -> thôi chờ.
+
+        Đo bằng ĐỒNG HỒ AUDIO. Đo bằng đồng hồ thật thì hỏng ở đúng chế độ
+        đang dùng: client dừng file ngay tại endpoint, nên trong lúc chờ không
+        có audio nào chạy — cửa sổ tự hết giờ trước khi đoạn nói tiếp kịp tới,
+        và câu không bao giờ được ghép. Đã đo thấy đúng như vậy.
+        """
+        held = self._held
+        if held is None:
+            return
+        # Neo vào chỗ đoạn audio KẾT THÚC, không vào lúc bắt đầu giữ: lúc bắt
+        # đầu giữ là sau khi STT xong, mà STT xong lúc nào thì tùy client có
+        # đang dừng file hay không. Neo vào vị trí audio thì hai chế độ đo ra
+        # cùng một thứ.
+        end_s = held.segment.start_s + held.segment.duration_s
+        window_s = self.config.stt.merge_window_ms / 1000
+        if self.chunker.stream_s - end_s < window_s:
+            return
+        if self.chunker.is_active:
+            # Người ta ĐANG nói tiếp. Bỏ chờ lúc này là cắt ngay giữa đoạn nói
+            # tiếp — đúng thứ cả cơ chế này sinh ra để tránh. Chờ hết câu đã.
+            return
+        if self._pipeline_pending():
+            # Đoạn nói tiếp vừa chốt endpoint và đang xếp hàng chờ nghe. Bỏ
+            # chờ lúc này là thua cuộc đua: câu dở bị dịch riêng ngay trước
+            # khi chặng nghe kịp ghép nó vào. Đã đo thấy đúng như vậy.
+            return
+        self._cancel_hold_timer()
+        self._held = None
+        utterance = self.state.get(held.utterance_id)
+        if utterance is None or utterance.is_terminal:
+            return
+        logger.info(
+            "%s: %s không ai nói tiếp — dịch nguyên câu dở",
+            self.session_id, held.utterance_id,
+        )
+        await self._after_transcript(
+            held.segment, held.transcript, held.utterance_id, utterance
+        )
+
+    def _pipeline_pending(self) -> bool:
+        """Còn câu nào đang chờ nghe hoặc đang nghe dở không."""
+        if self._pipeline_queue.qsize() > 0:
+            return True
+        task = self._pipeline_task
+        return task is not None and not task.done()
 
     def _cancel_hold_timer(self) -> None:
         if self._hold_timer is not None and not self._hold_timer.done():
@@ -575,13 +629,13 @@ class CopilotSession:
         with contextlib.suppress(Exception):
             self.state.transition(utterance_id, UtteranceState.DONE)
 
-    async def _flush_hold_after(self, utterance_id: str) -> None:
-        """Hết giờ chờ mà không ai nói tiếp -> câu dở vẫn phải được dịch.
+    async def _flush_hold_after(self, utterance_id: str, delay_s: float) -> None:
+        """Backstop: client ngừng gửi audio hẳn thì đồng hồ audio đứng yên.
 
         Người ta có quyền bỏ lửng câu. Giữ mãi thì mất hẳn câu đó.
         """
         try:
-            await asyncio.sleep(self.config.stt.merge_window_ms / 1000)
+            await asyncio.sleep(delay_s)
         except asyncio.CancelledError:
             return
         held = self._held
@@ -1066,7 +1120,16 @@ class CopilotSession:
 
         if control.action == "speak":
             # Client tự điều phối thứ tự đọc (chế độ nghe lại từng câu).
-            utterance = self.state.current
+            #
+            # Gắn vào ĐÚNG câu client yêu cầu, không phải `state.current`:
+            # chặng nghe chạy trước chặng dịch nên `state.current` thường đã là
+            # một câu nói sau. Client dựa vào `utterance_id` của `tts_done` để
+            # biết lượt đọc nào vừa xong.
+            utterance = (
+                self.state.get(control.utterance_id)
+                if control.utterance_id
+                else self.state.current
+            )
             if utterance is None or self.tts is None or not control.text:
                 return
             self._speak(

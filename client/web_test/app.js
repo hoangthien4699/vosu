@@ -46,6 +46,7 @@ const state = {
   utt: null,         // dữ liệu câu đang xử lý, gom để nghe lại
   review: null,      // tiến trình nghe lại đang chạy
   ttsWaiter: null,   // resolve khi lượt TTS hiện tại kết thúc
+  ttsWaitFor: null,  // ... của ĐÚNG utterance này
 };
 
 /* ------------------------------- nhật ký ------------------------------- */
@@ -283,7 +284,17 @@ function onEvent(event) {
       ui.mStt.textContent = ms(data.latency_ms);
       log(type, `[${data.language}] ${data.text}`);
 
-      // Server đã chốt được một câu -> giữ file lại cho tới khi nghe xong.
+      // Dừng lại LẦN NỮA ở đây, không chỉ ở `utterance_endpoint`.
+      //
+      // Đường đi bị hở: câu nghe ra còn dở -> `utterance_continued` -> file
+      // phát tiếp. Nếu rồi không ai nói tiếp thì server hết giờ chờ và dịch
+      // luôn câu dở đó — lúc ấy KHÔNG còn endpoint nào nữa để dừng file, nên
+      // bản dịch bị đọc chồng lên câu đang phát.
+      //
+      // pausePlayback() không làm gì nếu đã dừng sẵn, nên đường bình thường
+      // không đổi.
+      beginUtteranceHold();
+
       state.utt = {
         id: uttId,
         startS: data.start_s ?? 0,
@@ -424,7 +435,7 @@ function stop() {
   state.running = false;
   state.review = null;
   state.utt = null;
-  if (state.ttsWaiter) { state.ttsWaiter(); state.ttsWaiter = null; }
+  if (state.ttsWaiter) { state.ttsWaiter(); state.ttsWaiter = null; state.ttsWaitFor = null; }
   ui.reviewSteps.hidden = true;
   if (state.file) {
     const wake = state.file.wake;
@@ -511,8 +522,11 @@ function resumePlayback() {
  * nghe lại treo và file không bao giờ phát tiếp.                             */
 function noteBusy(type) {
   if (state.ttsWaiter && (type === "tts_done" || type === "tts_cancelled" || type === "tts_error")) {
+    // Bỏ qua lượt đọc của câu khác — nó không nói gì về câu ta đang chờ.
+    if (state.ttsWaitFor && uttId && uttId !== state.ttsWaitFor) return;
     const resolve = state.ttsWaiter;
     state.ttsWaiter = null;
+    state.ttsWaitFor = null;
     resolve();
     return;
   }
@@ -550,14 +564,20 @@ function resetSteps() {
 }
 
 
-function speakAndWait(text, field) {
+function speakAndWait(text, field, uttId) {
   if (!text?.trim() || state.ws?.readyState !== WebSocket.OPEN) return Promise.resolve();
   return new Promise((resolve) => {
+    // Chờ ĐÚNG lượt đọc của câu này. Chờ `tts_done` bất kỳ thì một lượt đọc
+    // cũ về muộn sẽ giải phóng nhầm, và file chạy tiếp trong lúc bản dịch
+    // câu hiện tại còn đang đọc dở.
     state.ttsWaiter = resolve;
-    state.ws.send(JSON.stringify({ action: "speak", text, field }));
+    state.ttsWaitFor = uttId || null;
+    state.ws.send(JSON.stringify({ action: "speak", text, field, utterance_id: uttId }));
     // Không để treo vĩnh viễn nếu TTS hỏng mà không phát event nào.
     setTimeout(() => {
-      if (state.ttsWaiter === resolve) { state.ttsWaiter = null; resolve(); }
+      if (state.ttsWaiter === resolve) {
+        state.ttsWaiter = null; state.ttsWaitFor = null; resolve();
+      }
     }, 30000);
   });
 }
@@ -579,7 +599,7 @@ async function runReview(utt) {
         ? "nghe lại: câu để nói theo (đọc chậm)"
         : "nghe lại: bản dịch";
       // Chiều nào thì server tự chọn giọng và tốc độ — client chỉ nói đọc cái gì.
-      await speakAndWait(utt.translation, "translation");
+      await speakAndWait(utt.translation, "translation", utt.id);
       markStep("translation", "done");
     }
   } finally {

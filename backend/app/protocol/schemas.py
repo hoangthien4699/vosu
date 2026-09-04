@@ -202,6 +202,10 @@ class ClientControl(_Strict):
     field: Literal["translation", "coach"] | None = None
     #: `speak`: ép dùng giọng cụ thể ("vi" hoặc "en"). None = theo config.
     voice: Literal["vi", "en"] | None = None
+    #: `speak`: câu nào. Client chờ đúng `tts_done` của id này rồi mới phát
+    #: tiếp file — chờ `tts_done` bất kỳ thì một lượt đọc cũ về muộn sẽ giải
+    #: phóng nhầm và file chạy tiếp trong lúc bản dịch còn đang đọc dở.
+    utterance_id: str | None = None
     #: `set_tts_mode`: "auto" = server tự đọc translation (mặc định, §2.4.1);
     #: "manual" = server không tự đọc gì, client tự yêu cầu từng phần theo
     #: thứ tự mình muốn. Dùng cho chế độ nghe lại từng câu.
