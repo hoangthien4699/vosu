@@ -104,3 +104,47 @@ def test_cau_ngan_that_van_co_vad_endpoint():
         f"câu {duration:.2f}s (< ngưỡng 1.5s) không có VAD endpoint — "
         "final STT sẽ không bao giờ chạy cho câu ngắn"
     )
+
+
+def test_ngung_giua_cau_khong_bi_cat_o_nguong_mac_dinh():
+    """Người nói chậm ngừng giữa câu KHÔNG được bị cắt thành hai utterance.
+
+    Đo thật: ở 400ms (mặc định cũ), chỉ cần ngừng 500ms là bị cắt đôi. Bản
+    dịch của một mảnh câu thì sai hẳn nghĩa, nên ngưỡng phải đủ rộng.
+    """
+    from app.audio.chunker import AudioChunker
+    from app.core.config import load_config
+
+    samples = speech_samples()
+    if not samples:
+        pytest.skip("chưa có audio mẫu")
+
+    config = load_config()
+    assert config.vad.min_silence_ms >= 800, (
+        f"min_silence_ms={config.vad.min_silence_ms} quá ngắn — người nói chậm sẽ bị cắt câu"
+    )
+
+    rng = np.random.default_rng(0)
+    pcm = load_wav(samples[-1])
+    # ghép hai nửa của cùng một câu, ở giữa là khoảng ngừng 600ms
+    half = len(pcm) // 2
+    pause = rng.normal(0, 0.0005, int(16000 * 0.6)).astype(np.float32)
+    silence = rng.normal(0, 0.0005, int(16000 * 0.5)).astype(np.float32)
+    tail = rng.normal(0, 0.0005, int(16000 * 1.6)).astype(np.float32)
+    stream = np.concatenate([silence, pcm[:half], pause, pcm[half:], tail])
+
+    processor = VadProcessor(
+        SileroVadBackend(MODEL),
+        min_silence_ms=config.vad.min_silence_ms,
+        min_speech_ms=config.vad.min_speech_ms,
+    )
+    chunker = AudioChunker(processor, min_partial_window_s=1.5, partial_cooldown_s=0.8)
+    finals = [
+        s
+        for i in range(0, len(stream), 1600)
+        for s in chunker.feed(stream[i : i + 1600])
+        if s.is_final
+    ]
+    assert len(finals) == 1, (
+        f"ngừng giữa câu 600ms bị cắt thành {len(finals)} utterance"
+    )
