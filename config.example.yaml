@@ -138,7 +138,26 @@ llm:
   repeat_penalty: 1.15
   swa_full: true
   # Bộ nhớ hội thoại (§10). 0 = tắt, mỗi câu dịch biệt lập.
-  history_turns: 6
+  # Số lượt giữ trong bộ nhớ — KỂ CẢ CÂU ĐANG XỬ LÝ.
+  #
+  # LỆCH MỘT ĐƠN VỊ: `add()` chạy trước `render(exclude=câu hiện tại)`, nên số
+  # lượt TRƯỚC model thật sự thấy là history_turns - 1. Đặt 1 = TẮT HẲN.
+  #
+  #     history_turns = 2  ->  model thấy 1 lượt trước
+  #     history_turns = 6  ->  model thấy 5 lượt trước
+  #
+  # ĐÃ ĐO (benchmarks/fidelity.py --history-turns, lịch sử KHÔNG liên quan —
+  # mô phỏng lúc đổi chủ đề giữa chừng):
+  #
+  #     0 lượt trước   59/62 (95%)   2/26 thiếu ý   1778ms
+  #     1 lượt trước   59/62 (95%)   2/26 thiếu ý   2025ms
+  #     2 lượt trước   57/62 (92%)   4/26 thiếu ý   2117ms
+  #     6 lượt trước   57/62 (92%)   4/26 thiếu ý   2232ms
+  #
+  # Từ 2 lượt trước trở lên bắt đầu kéo điểm xuống và cộng độ trễ. Một lượt
+  # trước thì vô hại, và ĐỦ để hưởng lợi: benchmarks/context_ab.py cho
+  # 3/5 -> 4/5 khi lượt trước có liên quan, chỉ với một lượt.
+  history_turns: 2
   history_chars: 1200
   startup_timeout_s: 90.0
 

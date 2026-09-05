@@ -220,7 +220,34 @@ class LlmConfig:
     # Ngân sách: n_ctx=2048, system prompt ~200 token, output ~110 token — nên
     # lịch sử không nên vượt ~1.5k token. `history_chars` là trần thô theo ký
     # tự, cắt từ lượt cũ nhất.
-    history_turns: int = 6
+    #: Số lượt giữ trong bộ nhớ hội thoại — KỂ CẢ CÂU ĐANG XỬ LÝ.
+    #:
+    #: LỆCH MỘT ĐƠN VỊ, dễ mắc: `history.add()` chạy TRƯỚC
+    #: `render(exclude=câu hiện tại)`, nên số lượt TRƯỚC mà model thật sự thấy
+    #: là `history_turns - 1`. Đặt 1 nghĩa là TẮT HẲN lịch sử (đã mắc; test
+    #: `test_cau_sau_nhin_thay_cau_truoc` bắt được).
+    #:
+    #:     history_turns = 2  ->  model thấy 1 lượt trước
+    #:     history_turns = 6  ->  model thấy 5 lượt trước
+    #:
+    #: ĐÃ ĐO (benchmarks/fidelity.py --history-turns, 26 ca câu ĐỘC LẬP, tức
+    #: lịch sử KHÔNG LIÊN QUAN — mô phỏng lúc người ta đổi chủ đề):
+    #:
+    #:     0 lượt trước   59/62 (95%)   2/26 thiếu ý   1778ms
+    #:     1 lượt trước   59/62 (95%)   2/26 thiếu ý   2025ms
+    #:     2 lượt trước   57/62 (92%)   4/26 thiếu ý   2117ms
+    #:     6 lượt trước   57/62 (92%)   4/26 thiếu ý   2232ms
+    #:
+    #: Từ 2 lượt trước trở lên, lịch sử không liên quan bắt đầu KÉO ĐIỂM XUỐNG
+    #: và cộng thêm độ trễ. Một lượt trước thì vô hại.
+    #:
+    #: Và một lượt là ĐỦ để hưởng lợi: benchmarks/context_ab.py cho 3/5 -> 4/5
+    #: khi lượt trước CÓ liên quan, chỉ với một lượt.
+    #:
+    #: Phạm vi của kết luận: bộ 26 ca không đo được trường hợp 5 lượt trước
+    #: đều liên quan. Nhưng nhiều lượt không có lợi ích nào ĐO ĐƯỢC để bù cho
+    #: phần thiệt đã đo được, nên hạ xuống 2 (= 1 lượt trước).
+    history_turns: int = 2
     history_chars: int = 1200
     extra_args: list[str] = field(default_factory=list)
 

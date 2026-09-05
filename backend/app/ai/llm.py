@@ -36,73 +36,64 @@ def language_name(code: str | None) -> str:
     return _LANGUAGE_NAMES.get(code.strip().lower().split("-")[0], code)
 
 
-_TO_USER = """You are a live interpreter for a user wearing earbuds.
-Someone is speaking TO the user in a foreign language. Translate what they said
-into {target}.
+#: Prompt ĐÃ ĐO — xem benchmarks/prompt_conversational.py.
+#:
+#: Bản trước đặt bài toán là DỊCH CHÍNH XÁC và cấm đổi cấu trúc câu. Bản này
+#: đặt lại thành DỊCH HỘI THOẠI NÓI, cho phép dựng lại câu miễn không đổi
+#: nghĩa — vì đầu vào là văn bản do STT sinh ra, tức lời NÓI chứ không phải
+#: câu viết chuẩn.
+#:
+#:     prompt                       yếu tố giữ   thiếu ý   tiểu từ    P50
+#:     dịch chính xác (bản cũ)      60/62 (97%)    2/26      1/5    2193ms
+#:     dịch hội thoại nói (bản này) 59/62 (95%)    2/26      2/5    1683ms
+#:
+#: Hoà về độ trung thực (chênh 1 yếu tố, trong mức nhiễu), tiểu từ gấp đôi,
+#: nhanh hơn 1.3 lần vì prompt ngắn hơn.
+#:
+#: Đây là thay đổi prompt ĐẦU TIÊN dịch chuyển được tiểu từ. Rút gọn prompt
+#: (297 -> 32 từ) trước đó không nhúc nhích, vẫn đúng 1/5 — nên cái ăn thua là
+#: KHUNG BÀI TOÁN, không phải độ dài.
+#:
+#: NGÔN NGỮ ĐÍCH PHẢI LÀ THAM SỐ. Lần đo đầu tôi ghi cứng "into Vietnamese",
+#: chiều Việt->Anh không dịch gì cả, điểm tụt xuống 53% và suýt kết luận sai.
+_SPOKEN = """You are a real-time conversational translator.
 
-Output ONE compact JSON object and nothing else:
-{{"translation":"..."}}
+Source language: {source}
+Target language: {target}
 
-Accuracy comes first. A translation that reads beautifully but loses or
-changes what they said is a failure.
+{who_speaks} into natural SPOKEN {target} — the way people actually talk to
+each other, not the way documents are written.
 
-Rules, in order of priority:
-1. Carry over EVERY element: each clause, every noun, number, date, name,
-   negation ("not", "won't"), and hedge ("probably", "might", "about"). If
-   they said two sentences, produce two sentences.
-2. Do not substitute, generalise, or invent. Translate the noun they actually
-   used — not a related one you think fits better. If you are unsure of a term,
-   render it plainly rather than guessing a fancier word.
-3. Leave nothing in the source language. Every word must be {target}, with
-   correct spelling and diacritics, and no characters from a script {target}
-   does not use.
-4. Keep WHO DOES WHAT exactly as they said it. Never swap who is asking and
+The input comes from speech recognition: it is how someone TALKS, not a clean
+written sentence. Translate what they meant, not the surface structure.
+
+Priorities, in order:
+1. Preserve the exact meaning and intent.
+2. Preserve the speaker's tone, emotion and level of politeness.
+3. Make it sound natural to a native speaker.
+{particles}4. Do not translate word by word. Rewrite unnatural structures when needed.
+5. Keep every number, date, name, negation and hedge exactly as said.
+6. Do not add information that is not there. Do not drop meaningful information.
+7. Keep who does what to whom exactly as said. Never swap who is asking and
    who is offering.
-5. Read times, dates and numbers the way a person means them out loud: "by
-   three" is three o'clock, not the third day; "this afternoon" is the
-   afternoon, not the evening.
-6. Write the way people TALK, not the way documents are written. Reach for the
-   everyday phrasing:
-     "ngay cả khi"                   -> "dù", "cho dù"
-     "Việc đó có được không?"        -> "Vậy được không?"
-     "Chúng ta đang nghĩ về việc..." -> "Bên mình đang tính..."
-     "dư địa"                        -> "thời gian dư", "chỗ xoay xở"
-   Where a conversational sentence would naturally end with "nhé", "ạ", "nhỉ",
-   "đấy" or "thôi", use it.
-
-   This is about WORDING ONLY. Never change what the sentence means in order to
-   sound more casual.
-- Translate only. Do not answer, explain, or add commentary.{history}"""
-
-_TO_COUNTERPART = """You are a live interpreter for a user wearing earbuds.
-The USER just spoke in {source}. The person they are talking to does not
-understand {source}. Translate what the user said into {target}, so the user
-can say it out loud.
+8. Keep it concise — it will be read aloud by a speech synthesiser.
+{history}
 
 Output ONE compact JSON object and nothing else:
-{{"translation":"..."}}
+{{"translation":"..."}}"""
 
-Accuracy comes first. The user will say your translation out loud and be held
-to it, so it must carry exactly what they meant — no more, no less.
+#: Chỉ thêm khi đích là tiếng Việt — tiểu từ tình thái không có tương đương ở
+#: các tiếng khác, nêu ra chỉ tổ làm nhiễu.
+_PARTICLES_VI = ('   Where a spoken sentence would naturally end with "nhé", '
+                 '"ạ", "nhỉ",\n   "đấy" or "thôi", use it.\n')
 
-Rules, in order of priority:
-1. Carry over EVERY element: each clause, every noun, number, date, name,
-   negation, and hedge. Do not compress two clauses into one.
-2. Do not add ideas the user did not say, and do not soften or strengthen what
-   they said.
-3. Keep WHO DOES WHAT exactly as the user said it. If the user is ASKING the
-   other person to do something, the translation must ask them too — never turn
-   a request into an offer, and never swap who helps whom.
-4. {source} pronouns like "anh", "em", "chị" mark politeness and who is
-   speaking to whom. Carry that relationship over; do not invert it.
-5. Write it entirely in {target}, and read times the way they were meant:
-   "chiều nay" is this afternoon, not tonight.
-6. Within those constraints, make it sound like something a person would
-   actually say out loud — not stiff, not written prose.
+_TO_USER_INTRO = "Someone is speaking to the user. Translate what they said"
+_TO_COUNTERPART_INTRO = (
+    "The user just spoke. The person they are talking to does not understand "
+    "the user's language. Translate what the user said, so the user can say it "
+    "out loud"
+)
 
-NEVER copy the {source} sentence into the output. Even if the sentence is long
-or hard, produce {target}. Repeating the input unchanged is always wrong.
-- Translate only. Do not answer, explain, or add commentary.{history}"""
 
 _HISTORY_RULE = """
 
@@ -157,12 +148,22 @@ def system_prompt(
     """
     context = _HISTORY_RULE.format(history=history.strip()) if history.strip() else ""
     if direction is Direction.TO_COUNTERPART:
-        return _TO_COUNTERPART.format(
-            source=language_name(user_language),
-            target=language_name(counterpart_language),
-            history=context,
-        )
-    return _TO_USER.format(target=language_name(user_language), history=context)
+        source, target = user_language, counterpart_language or "en"
+        who = _TO_COUNTERPART_INTRO
+    else:
+        source, target = counterpart_language or "en", user_language
+        who = _TO_USER_INTRO
+
+    # `retry_hint` KHÔNG dùng ở đây: `build_prompt` gắn nó vào cuối lượt user,
+    # sau câu cần dịch, để nó là thứ model đọc cuối cùng trước khi sinh. Thêm
+    # vào đây nữa là lặp đôi.
+    return _SPOKEN.format(
+        source=language_name(source),
+        target=language_name(target),
+        who_speaks=who,
+        particles=_PARTICLES_VI if target == "vi" else "",
+        history=context,
+    )
 
 
 # --------------------------------------------------------------------------- #
