@@ -355,8 +355,16 @@ class LlmClient:
         direction: Direction = Direction.TO_USER,
         counterpart_language: str | None = None,
         history: str = "",
+        retry_hint: str = "",
     ) -> str:
-        """Prompt đúng định dạng của model đang nạp và đúng chiều dịch."""
+        """Prompt đúng định dạng của model đang nạp và đúng chiều dịch.
+
+        `retry_hint` PHẢI được chuyển tiếp. Thiếu nó thì lưới an toàn
+        `retry_on_bad_translation` ném TypeError ngay khi được kích hoạt, lỗi
+        bị `except Exception` của worker nuốt, và câu dịch hỏng chết lặng thay
+        vì được dịch lại. Bật mặc định từ đầu mà chưa lần nào chạy được — chỉ
+        lộ ra khi thử một model yếu hơn, đủ để có bản dịch hỏng thật.
+        """
         session = self._config.session
         return build_prompt(
             text,
@@ -366,6 +374,7 @@ class LlmClient:
             user_language=session.user_language,
             counterpart_language=counterpart_language or session.counterpart_language,
             history=history,
+            retry_hint=retry_hint,
         )
 
     async def start(self) -> None:
