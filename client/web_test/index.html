@@ -14,6 +14,10 @@
     <button id="toggle">Bắt đầu nghe</button>
     <button id="captureDevice" class="ghost"
             title="Nghe âm thanh đang phát trên máy (YouTube, Meet, Zoom…). Lấy luồng số trước khi ra loa nên chạy cả khi loa tắt, và sạch hơn micro. Chọn một TAB rồi tick 'Chia sẻ âm thanh tab'.">Nghe âm thanh máy…</button>
+    <label id="muteSourceWrap" class="check"
+           title="Hệ thống VẪN nghe được tab đó, chỉ là loa của bạn không phát tiếng gốc nữa — nên bạn chỉ nghe bản dịch. Đừng bấm tắt tiếng trong YouTube: làm vậy thì chính hệ thống cũng không nghe thấy gì.">
+      <input id="muteSource" type="checkbox" checked> tắt tiếng gốc
+    </label>
     <button id="pickFile" class="ghost" title="Phát một file audio thay cho micro">Phát file…</button>
     <input id="fileInput" type="file" accept="audio/*" hidden>
     <button id="pauseBtn" class="ghost" hidden>Tạm dừng</button>
