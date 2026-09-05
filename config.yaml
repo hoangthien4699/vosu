@@ -141,6 +141,32 @@ llm:
   # 0 = greedy. Dịch không cần sáng tạo, và greedy cho kết quả TÁI LẬP ĐƯỢC —
   # ở 0.1 cùng cấu hình đo ra 80/83/86% qua ba lần chạy, mọi so sánh A/B đều
   # nằm trong nhiễu.
+  # ĐÃ ĐO: bốn tham số dưới đây KHÔNG phải nguyên nhân của việc thiếu tiểu từ
+  # tình thái (nhé/ạ/thôi/nhỉ) trong bản dịch tiếng Việt.
+  #
+  # Nghi ngờ hợp lý: temperature 0 luôn chọn token xác suất cao nhất, mà tiểu
+  # từ là thành phần TÙY CHỌN; repeat_penalty phạt token đã xuất hiện, mà tiểu
+  # từ ngắn và hay lặp; n_predict cắt từ CUỐI câu, mà tiểu từ nằm cuối câu.
+  # Đo từng cái trên 26 ca (benchmarks/fidelity.py):
+  #
+  #   cấu hình                yếu tố   thiếu ý   thiếu tiểu từ
+  #   temp 0 (đang dùng)      60/62      2/26        4/5
+  #   repeat_penalty 1.0      60/62      2/26        4/5
+  #   grammar tắt             60/62      2/26        4/5
+  #   n_predict 400           60/62      2/26        4/5
+  #   temp 0.3 (hai lần)      59, 60     3, 2        4/5, 4/5
+  #   temp 0.7 (hai lần)      58, 60     4, 2        5/5, 4/5
+  #
+  # Không cái nào đụng được vào cột cuối. Nâng temperature còn làm TỆ ĐI: nó
+  # sinh ra "bỏ aside", "mối lo đáng lẽ ra", "Anh có phiền để anh chờ đợi" —
+  # loạn tiếng Việt chứ không tự nhiên hơn. Và chênh lệch 58-60 giữa các lần
+  # chạy chính là mức nhiễu mà temperature 0 sinh ra để tránh.
+  #
+  # Bản dịch dài nhất 126 ký tự, mức cắt của n_predict=160 là ~480 — chưa bao
+  # giờ có câu nào bị cắt.
+  #
+  # Kết luận: thiếu tiểu từ là GIỚI HẠN NĂNG LỰC MODEL, không phải do cấu hình.
+  # Đừng chỉnh lại mấy số này với hy vọng chữa được nó.
   temperature: 0.0
   n_gpu_layers: null         # null -> DeviceProfile macos = 99 (Metal)
   prompt_template: auto      # auto suy từ tên file GGUF
