@@ -42,6 +42,9 @@ class PathsConfig:
     #: gradio/librosa nên không cài chung được. Xem scripts/setup_vieneu.sh.
     vieneu_python: str = ".venv-vieneu/bin/python"
     vieneu_sidecar: str = "scripts/vieneu_sidecar.py"
+    #: Tiến trình RIÊNG với TTS — hai việc chạy chồng nhau, dùng chung
+    #: một tiến trình là chúng xếp hàng chờ nhau.
+    speaker_sidecar: str = "scripts/speaker_sidecar.py"
     piper_voice_vi: str = "models/piper/vi_VN-vais1000-medium.onnx"
     piper_voice_en: str = "models/piper/en_US-lessac-medium.onnx"
     silero_vad_onnx: str = "models/silero_vad.onnx"
@@ -151,6 +154,23 @@ class SttConfig:
     merge_window_ms: int = 1200
     #: Backstop bằng đồng hồ thật, phòng khi client ngừng gửi audio hẳn.
     merge_backstop_s: float = 15.0
+    # --- nhận ra đổi người nói ---
+    #
+    # Đổi người nói là mốc CHẮC CHẮN để cắt câu: A nói xong thì B mới đáp. Độ
+    # dài khoảng lặng thì không — đo thật, ngập ngừng giữa câu (800ms) còn dài
+    # hơn khoảng nghỉ giữa hai câu (700ms).
+    #
+    # Đo trên 20 đoạn giọng máy (benchmarks/speaker_sep.py): hai người 96-100%.
+    # Vector đến từ speaker_encoder.onnx của VieNeu — cần venv riêng, thiếu thì
+    # tự tắt và quay về cách cũ.
+    # MẶC ĐỊNH TẮT: cần venv riêng (.venv-vieneu), giống tts.engine=vieneu.
+    # Bật sẵn thì máy chưa dựng venv sẽ chờ tiến trình phụ ở MỌI phiên — đã
+    # mắc: bộ test từ 9 giây lên 9.5 phút.
+    speaker_split: bool = False
+    #: Trên ngưỡng này là cùng người, dưới `diff` là người khác, ở GIỮA là
+    #: không chắc — lúc đó KHÔNG quyết, vì cắt nhầm giữa câu tệ hơn không cắt.
+    speaker_same_threshold: float = 0.78
+    speaker_diff_threshold: float = 0.62
     #: Ghép tối đa ngần này lần cho một câu. Chặn trường hợp heuristic đọc sai
     #: liên tục làm câu dài vô hạn và độ trễ tăng không giới hạn.
     max_merges: int = 2

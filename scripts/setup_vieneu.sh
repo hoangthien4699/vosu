@@ -36,6 +36,10 @@ echo '{"text":"Xin chào.","voice":"Ngọc Huyền"}' \
   | head -c 32 | grep -q READY && echo "    OK" || { echo "    HỎNG"; exit 1; }
 
 echo
-echo "Xong. Bật bằng cách đặt trong config.yaml:"
+echo "Xong. Venv này phục vụ HAI việc, bật riêng trong config.yaml:"
+echo
 echo "    tts:"
-echo "      engine: vieneu"
+echo "      engine: vieneu        # giọng đọc truyền cảm"
+echo
+echo "    stt:"
+echo "      speaker_split: true   # nhận ra đổi người nói để cắt đúng câu"
