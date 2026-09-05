@@ -47,10 +47,15 @@
     </div>
   </section>
 
-  <section class="panel accent">
-    <h2 id="translationTitle">Bản dịch</h2>
-    <p id="translation" class="translation" aria-live="polite"></p>
-    <p id="coachHint" class="hint" hidden>Hãy đọc theo câu trên</p>
+  <section class="panel accent wide">
+    <h2 id="translationTitle">Bản dịch
+      <small id="chatCount"></small>
+    </h2>
+    <!-- Lịch sử kiểu tin nhắn: câu mới xuống DƯỚI CÙNG, câu cũ ở trên và vẫn
+         đọc được. Trước đây chỉ có MỘT dòng bị ghi đè mỗi câu, nên câu sau
+         xóa mất câu trước khi người dùng chưa kịp đọc. -->
+    <div id="chat" class="chat" aria-live="polite"></div>
+    <p id="coachHint" class="hint" hidden>Hãy đọc theo câu mới nhất</p>
   </section>
 
   <section class="panel wide">

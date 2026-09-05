@@ -13,19 +13,66 @@ import path from "node:path";
 const ROOT = process.argv[2];
 const problems = [];
 
-/* ---- DOM giả ---- */
+/* ---- DOM giả ----
+ *
+ * Đủ THẬT để chạy được code dựng lịch sử bản dịch: có con, có querySelector,
+ * có classList thật. Bản giả sơ sài hơn sẽ báo lỗi giả ("querySelector is not
+ * a function") và cám dỗ sửa code cho vừa bản giả — ngược đời.                */
 const nodes = new Map();
-const mk = (id) => ({
-  id, textContent: "", className: "", value: "", checked: id === "autoPause",
-  disabled: false, hidden: false, children: [], dataset: {}, style: {},
-  classList: { add() {}, remove() {}, toggle() {} },
-  appendChild() {}, prepend() {}, remove() {},
-  addEventListener() {}, click() {},
-  get childElementCount() { return 0; }, get lastChild() { return null; },
-});
+
+function mk(id, tag = "div") {
+  const el = {
+    id, tag, value: "", checked: id === "autoPause",
+    disabled: false, hidden: false, dataset: {}, style: {},
+    _children: [], _text: "", _classes: new Set(),
+    classList: {
+      add(...c) { c.forEach((x) => el._classes.add(x)); },
+      remove(...c) { c.forEach((x) => el._classes.delete(x)); },
+      toggle(c, on) { if (on === undefined) { el._classes.has(c) ? el._classes.delete(c) : el._classes.add(c); } else if (on) { el._classes.add(c); } else { el._classes.delete(c); } },
+      contains(c) { return el._classes.has(c); },
+    },
+    get className() { return [...el._classes].join(" "); },
+    set className(v) { el._classes = new Set(String(v).split(/\s+/).filter(Boolean)); },
+    get textContent() { return el._text; },
+    set textContent(v) { el._text = String(v); el._children = []; },
+    get children() { return el._children; },
+    get childElementCount() { return el._children.length; },
+    get firstChild() { return el._children[0] ?? null; },
+    get lastChild() { return el._children[el._children.length - 1] ?? null; },
+    get lastElementChild() { return el._children[el._children.length - 1] ?? null; },
+    get scrollHeight() { return el._children.length * 40; },
+    get clientHeight() { return 400; },
+    scrollTop: 0,
+    appendChild(c) { el._children.push(c); return c; },
+    prepend(c) { el._children.unshift(c); return c; },
+    removeChild(c) { el._children = el._children.filter((x) => x !== c); return c; },
+    remove() {},
+    addEventListener() {}, click() {},
+    querySelector(sel) {
+      // Đủ cho hai dạng code thật dùng: `.msg[data-utt="..."]` và `.txt`.
+      const attr = /^\.(\S+?)\[data-utt="(.*)"\]$/.exec(sel);
+      const plain = /^\.([\w-]+)$/.exec(sel);
+      const khop = (c) => {
+        if (attr) return c._classes?.has(attr[1]) && c.dataset?.utt === attr[2];
+        if (plain) return c._classes?.has(plain[1]);
+        return false;
+      };
+      const walk = (n) => {
+        for (const c of n._children || []) {
+          if (khop(c)) return c;
+          const deep = walk(c);
+          if (deep) return deep;
+        }
+        return null;
+      };
+      return walk(el);
+    },
+  };
+  return el;
+}
 globalThis.document = {
   getElementById: (id) => (nodes.has(id) ? nodes.get(id) : nodes.set(id, mk(id)).get(id)),
-  createElement: () => mk("tmp"), addEventListener() {},
+  createElement: (tag) => mk("", tag), addEventListener() {},
 };
 globalThis.window = globalThis;
 globalThis.location = { protocol: "http:", host: "127.0.0.1:8000" };
@@ -112,6 +159,38 @@ state.ttsWaitFor = U;
 onEvent({ session_id: "s", utterance_id: "utt_999", sequence: 3, type: "tts_done",
           timestamp: "", data: EVENTS.tts_done });
 if (resolved) problems.push("tts_done của câu KHÁC lại giải phóng chờ");
+
+/* ---- lịch sử bản dịch: câu mới KHÔNG được xóa câu cũ ---- */
+/* Trước đây bản dịch là MỘT dòng bị ghi đè mỗi câu, nên khi người ta nói nhanh
+ * thì câu trước biến mất trước khi đọc kịp. */
+const chat = document.getElementById("chat");
+chat.textContent = "";
+const BA_CAU = [
+  ["utt_101", "First thing they said.", "Câu thứ nhất."],
+  ["utt_102", "Second thing.", "Câu thứ hai."],
+  ["utt_103", "Third thing.", "Câu thứ ba."],
+];
+for (const [id, src, dich] of BA_CAU) {
+  onEvent({ session_id: "s", utterance_id: id, sequence: 1, type: "copilot_started",
+            timestamp: "", data: { source_text: src, language: "en", direction: "to_user" } });
+  onEvent({ session_id: "s", utterance_id: id, sequence: 2, type: "translation_delta",
+            timestamp: "", data: { text: dich, full: dich, direction: "to_user", language: "vi" } });
+  onEvent({ session_id: "s", utterance_id: id, sequence: 3, type: "copilot_done",
+            timestamp: "", data: { ttft_ms: 1, total_ms: 2, tokens: 3, truncated: false } });
+}
+if (chat.childElementCount !== 3) {
+  problems.push(`đáng lẽ giữ 3 câu trong lịch sử, thực tế ${chat.childElementCount}`);
+} else {
+  const dau = chat.children[0].querySelector(".txt").textContent;
+  const cuoi = chat.children[2].querySelector(".txt").textContent;
+  if (dau !== "Câu thứ nhất.") {
+    problems.push("câu ĐẦU bị mất hoặc ghi đè: " + dau);
+  }
+  if (cuoi !== "Câu thứ ba.") problems.push("câu mới nhất không nằm dưới cùng");
+  if (chat.children[2]._classes.has("streaming")) {
+    problems.push("câu đã dịch xong vẫn còn đánh dấu đang chạy");
+  }
+}
 
 /* ---- chọn file thứ hai mà KHÔNG tải lại trang ---- */
 /* Kịch bản thật đã hỏng: `stop()` gọi ws.close() rồi `connect()` mở ngay socket
