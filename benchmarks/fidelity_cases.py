@@ -106,7 +106,8 @@ OUTBOUND = [
         "vi", "Tôi lo là khách hàng sẽ không hài lòng nếu chậm thêm.",
         must_keep=[["worried", "worry", "concerned", "afraid"],
                    ["customer", "client"],
-                   ["not", "won't", "unhappy", "n't"]],
+                   ["not", "won't", "unhappy", "n't", "dissatisfied",
+                    "unsatisfied", "displeased"]],
         note="phủ định phải còn",
     ),
     Case(
