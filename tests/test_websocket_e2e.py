@@ -699,7 +699,8 @@ def test_ngon_ngu_doi_phuong_lay_theo_thuc_te_nghe_duoc(client):
         send_utterance(ws)
         prompt = client.app.state.runtime.llm.prompts[-1]
 
-    assert "into Japanese" in prompt, "không bám theo ngôn ngữ thật của đối phương"
+    assert "Target language: Japanese" in prompt, \
+        "không bám theo ngôn ngữ thật của đối phương"
 
 
 # --------------------------------------------------------------------------- #
