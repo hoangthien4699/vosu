@@ -1079,38 +1079,61 @@ class CopilotSession:
         """Chặn hàng đợi đọc phình vô hạn khi người ta nói nhanh hơn máy đọc.
 
         Từ khi bỏ cắt lời (xem TtsConfig.barge_in), mọi bản dịch đều được đọc
-        trọn — đúng thứ người dùng cần. Nhưng đọc một câu mất ~2.5-3s trong khi
-        người nói nhanh có thể ra câu mới mỗi ~3s: nếu đọc chậm hơn nhịp nói
-        thì phần đọc tụt lại mãi và cuối cùng người dùng nghe bản dịch của
-        chuyện xảy ra một phút trước.
+        trọn. Nhưng đọc một câu mất ~2.5-3s trong khi người nói nhanh có thể ra
+        câu mới mỗi ~3s: đọc chậm hơn nhịp nói thì phần đọc tụt lại mãi và cuối
+        cùng người dùng nghe bản dịch của chuyện xảy ra một phút trước.
 
-        Vượt hạn thì bỏ bản CŨ NHẤT chứ không bỏ bản mới: bản cũ đã lạc hậu so
-        với cuộc nói chuyện. Và phải BÁO RA — mất một câu trong im lặng còn tệ
-        hơn chính việc mất câu.
+        ĐẾM THEO CÂU NÓI, KHÔNG THEO MẨU. Streaming TTS cắt một bản dịch dài
+        thành nhiều mẩu, tất cả thuộc CÙNG MỘT câu nói. Đếm theo mẩu thì một
+        bản dịch dài tự nó vượt hạn, và mẩu bị bỏ là mẩu CŨ NHẤT — tức PHẦN ĐẦU
+        của chính bản đọc đó. Đo thật: bản dịch 6 câu mất câu đầu, người dùng
+        nghe bản đọc bắt đầu từ giữa. Đây là lỗi tôi tự tạo ra khi thêm hàng
+        rào này.
 
-        Yêu cầu đọc thủ công (client tự điều phối) không bị cắt: lúc đó client
-        đang chờ đúng lượt đọc đó, bỏ đi là nó treo.
+        Và khi phải bỏ thì bỏ TRỌN một câu nói cũ, không bao giờ bỏ một mẩu
+        giữa chừng: nghe nửa bản đọc còn khó hiểu hơn là không nghe gì.
+
+        Yêu cầu đọc thủ công không bị đụng tới — client đang chờ đúng lượt đó,
+        bỏ đi là nó treo.
         """
         if manual:
             return
         limit = self.config.tts.max_pending_reads
-        while self._tts_queue.qsize() > limit:
+
+        items: list[_TtsItem | None] = []
+        while True:
             try:
-                stale = self._tts_queue.get_nowait()
+                items.append(self._tts_queue.get_nowait())
             except asyncio.QueueEmpty:
-                return
-            if stale is None or stale.is_end or stale.manual:
-                # Không phải mẩu chữ để đọc -> trả lại, đừng làm hỏng trạng thái.
-                self._tts_queue.put_nowait(stale)
-                return
+                break
+
+        def la_mau_doc(item) -> bool:
+            return item is not None and not item.is_end and not item.manual
+
+        thu_tu: list[str] = []
+        for item in items:
+            if la_mau_doc(item) and item.utterance_id not in thu_tu:
+                thu_tu.append(item.utterance_id)
+
+        bo: list[str] = []
+        while len(thu_tu) > limit:
+            cu_nhat = thu_tu.pop(0)
+            bo.append(cu_nhat)
+            items = [x for x in items
+                     if not (la_mau_doc(x) and x.utterance_id == cu_nhat)]
+
+        for item in items:
+            self._tts_queue.put_nowait(item)
+
+        for utterance_id in bo:
             logger.warning(
-                "%s: đọc không kịp nhịp nói, bỏ bản dịch cũ của %s",
-                self.session_id, stale.utterance_id,
+                "%s: đọc không kịp nhịp nói, bỏ trọn bản dịch của %s",
+                self.session_id, utterance_id,
             )
             self._loop.create_task(
                 self.bus.emit(
                     EventType.UTTERANCE_DROPPED,
-                    utterance_id=stale.utterance_id,
+                    utterance_id=utterance_id,
                     data={"reason": "read_backlog", "pending": limit},
                 )
             )

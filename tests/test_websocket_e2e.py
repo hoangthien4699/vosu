@@ -1241,3 +1241,85 @@ def test_khong_bo_yeu_cau_doc_thu_cong(client):
         return session._tts_queue.qsize()
 
     assert asyncio.run(scenario()) == 4, "yêu cầu đọc thủ công không được bỏ"
+
+
+def test_ban_dich_dai_khong_bi_mat_mau_nao(client):
+    """Bản dịch dài bị streaming TTS cắt thành nhiều mẩu — KHÔNG được mất mẩu.
+
+    Hàng rào chặn hàng đợi đọc từng đếm theo MẨU, mà một bản dịch dài tự nó
+    chiếm nhiều mẩu, nên nó vượt hạn và mẩu bị bỏ là mẩu CŨ NHẤT — tức phần
+    ĐẦU của chính bản đọc đó. Người dùng nghe bản đọc bắt đầu từ giữa.
+
+    Đo thật trước khi sửa: bản dịch 6 mẩu mất mẩu đầu.
+    """
+    from app.api.websocket import CopilotSession
+    from app.core.config import load_config
+
+    # Config RIÊNG: sửa vào config của fixture là làm bẩn các test khác, và
+    # với thứ tự chạy ngẫu nhiên thì lỗi hiện ra ở chỗ chẳng liên quan.
+    config = load_config()
+    config.tts.enabled = True
+    config.tts.max_pending_reads = 4
+    session = CopilotSession(
+        websocket=None, runtime=client.app.state.runtime, config=config,
+        session_id="sess_dai",
+    )
+    session._tts_available = True
+    session.tts = object()
+
+    mau = [f"Mẩu số {i + 1} của cùng một bản dịch." for i in range(6)]
+
+    async def scenario():
+        session._loop = asyncio.get_running_loop()
+        for m in mau:
+            session._speak("utt_001", m, field="translation")
+        await asyncio.sleep(0)
+        return [session._tts_queue.get_nowait().text
+                for _ in range(session._tts_queue.qsize())]
+
+    con_lai = asyncio.run(scenario())
+    assert con_lai == mau, (
+        "mất mẩu của MỘT bản dịch — hàng rào phải đếm theo CÂU NÓI, không theo mẩu"
+    )
+
+
+def test_van_bo_tron_cau_cu_khi_nhieu_cau_don_lai(client):
+    """Vế kia: nhiều câu KHÁC NHAU dồn lại thì vẫn phải bỏ, và bỏ TRỌN.
+
+    Bỏ nửa bản đọc còn khó hiểu hơn không nghe gì.
+    """
+    from app.api.websocket import CopilotSession
+    from app.core.config import load_config
+    from app.protocol.events import EventType
+
+    config = load_config()
+    config.tts.enabled = True
+    config.tts.max_pending_reads = 2
+    session = CopilotSession(
+        websocket=None, runtime=client.app.state.runtime, config=config,
+        session_id="sess_don",
+    )
+    session._tts_available = True
+    session.tts = object()
+
+    async def scenario():
+        session._loop = asyncio.get_running_loop()
+        for i in range(4):                       # bốn câu nói khác nhau
+            for phan in ("đầu", "cuối"):         # mỗi câu hai mẩu
+                session._speak(f"utt_{i:03d}", f"{phan} {i}", field="translation")
+        await asyncio.sleep(0)
+        con = [session._tts_queue.get_nowait() for _ in range(session._tts_queue.qsize())]
+        ev = []
+        while not session.bus._queue.empty():
+            e = session.bus._queue.get_nowait()
+            if e.type == EventType.UTTERANCE_DROPPED:
+                ev.append(e.utterance_id)
+        return con, ev
+
+    con, bo = asyncio.run(scenario())
+    con_lai = sorted({x.utterance_id for x in con})
+    assert con_lai == ["utt_002", "utt_003"], con_lai
+    assert bo == ["utt_000", "utt_001"], bo
+    # Mỗi câu còn lại phải còn ĐỦ hai mẩu, không bị cắt nửa.
+    for u in con_lai:
+        assert sum(1 for x in con if x.utterance_id == u) == 2, f"{u} bị cắt nửa"
