@@ -115,6 +115,30 @@ thread.
 === END OF CONTEXT ==="""
 
 
+#: ĐÃ ĐO — đừng rút gọn prompt này với hy vọng model "tự nhiên hơn".
+#:
+#: Giả thuyết hợp lý: prompt 297 từ với 6 quy tắc quá gò bó, model chỉ cần
+#: hiểu nó đang dịch sang tiếng Việt là đủ. Đo trên 26 ca
+#: (benchmarks/prompt_ab.py):
+#:
+#:     prompt              yếu tố giữ   thiếu ý   tiểu từ   P50
+#:     hiện tại (297 từ)   60/62 (97%)    2/26      1/5    2160ms
+#:     vừa (48 từ)         29/62 (47%)   15/26      1/5    1229ms
+#:     ngắn (32 từ)        33/62 (53%)   13/26      1/5    1161ms
+#:
+#: Nới ràng buộc GIẢM MỘT NỬA độ chính xác và KHÔNG thêm được tiểu từ nào.
+#:
+#: Nó cũng bác bỏ cách giải thích rằng năm quy tắc chính xác đang đè bẹp quy
+#: tắc 6 (quy tắc nêu thẳng tên các tiểu từ). Bỏ hết năm quy tắc đó thì tiểu
+#: từ vẫn 1/5.
+#:
+#: Kết luận đúng: HỄ CÒN ĐẶT LÀ VIỆC DỊCH thì model cho ra tiếng Việt giọng
+#: văn dịch, bất kể prompt dài ngắn hay có nêu tên tiểu từ hay không. Tiểu từ
+#: chỉ xuất hiện khi giao một việc KHÁC — viết lại một câu tiếng Việt cho
+#: giống lời nói (benchmarks/two_pass.py: 1/5 -> 5/5).
+#:
+#: Prompt ngắn nhanh hơn 1.9 lần vì ít token phải xử lý. Đó là đòn bẩy tốc độ
+#: có thật, nhưng cái giá 97% -> 47% thì không đánh đổi được.
 def system_prompt(
     direction: Direction = Direction.TO_USER,
     *,
