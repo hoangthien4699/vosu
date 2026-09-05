@@ -20,9 +20,19 @@ const problems = [];
  * a function") và cám dỗ sửa code cho vừa bản giả — ngược đời.                */
 const nodes = new Map();
 
+/* Checkbox nào đang `checked` trong index.html THẬT.
+ *
+ * Trước đây bản giả gán cứng `checked: id === "autoPause"`, nên nó lệch với
+ * HTML và test đỏ trên code đúng. Đọc từ chính HTML thì bản giả không thể
+ * lệch, và đổi mặc định trong HTML cũng được phản ánh ngay. */
+const TICH_SAN = new Set(
+  [...fs.readFileSync(path.join(ROOT, "index.html"), "utf8")
+      .matchAll(/<input[^>]*id="([^"]+)"[^>]*\bchecked\b[^>]*>/g)].map((m) => m[1])
+);
+
 function mk(id, tag = "div") {
   const el = {
-    id, tag, value: "", checked: id === "autoPause",
+    id, tag, value: "", checked: TICH_SAN.has(id),
     disabled: false, hidden: false, dataset: {}, style: {},
     _children: [], _text: "", _classes: new Set(),
     classList: {
@@ -273,15 +283,17 @@ function fakeStream(withAudio) {
     removeTrack(t) { this._tracks = this._tracks.filter((x) => x !== t); },
   };
 }
-let displayCalls = 0, shared = null, videoTrack = null;
+let displayCalls = 0, shared = null, videoTrack = null, lastConstraints = null;
 Object.defineProperty(globalThis, "navigator", {
   value: { mediaDevices: {
-    getDisplayMedia: async () => {
+    getDisplayMedia: async (constraints) => {
       displayCalls += 1;
+      lastConstraints = constraints;
       shared = fakeStream(true);
       videoTrack = shared.getVideoTracks()[0];
       return shared;
     },
+    getSupportedConstraints: () => ({ suppressLocalAudioPlayback: true }),
     getUserMedia: async () => { problems.push("nguồn 'device' lại đi gọi getUserMedia"); return fakeStream(true); },
   } },
   configurable: true,
@@ -305,6 +317,17 @@ if (shared && shared.getVideoTracks().length) {
 }
 if (videoTrack && !videoTrack.stopped) {
   problems.push("track video chưa stop() — camera/quay màn hình vẫn chạy vô ích");
+}
+/* Tắt tiếng gốc: hệ thống VẪN phải nghe được tab, chỉ loa người dùng im.
+ * Không có ràng buộc này thì cách duy nhất để khỏi nghe tiếng gốc là bấm tắt
+ * tiếng trong YouTube — mà làm vậy hệ thống cũng không nghe thấy gì. */
+if (!lastConstraints?.audio || typeof lastConstraints.audio !== "object") {
+  problems.push("getDisplayMedia không nhận ràng buộc audio");
+} else if (lastConstraints.audio.suppressLocalAudioPlayback !== true) {
+  problems.push(
+    "thiếu suppressLocalAudioPlayback — người dùng buộc phải tắt tiếng nguồn, "
+    + "và khi đó hệ thống cũng không nghe được"
+  );
 }
 
 /* nguồn không kèm audio -> phải báo lỗi rõ, không im lặng chạy tiếp */

@@ -27,6 +27,7 @@ const ui = {
   log: el("log"), pickFile: el("pickFile"), fileInput: el("fileInput"),
   pauseBtn: el("pauseBtn"), autoPause: el("autoPause"), captureDevice: el("captureDevice"),
   chat: el("chat"), chatCount: el("chatCount"),
+  muteSource: el("muteSource"), muteSourceWrap: el("muteSourceWrap"),
   autoPauseWrap: el("autoPauseWrap"), filePanel: el("filePanel"),
   fileName: el("fileName"), fileBar: el("fileBar"), filePos: el("filePos"),
   fileState: el("fileState"), reviewSteps: el("reviewSteps"),
@@ -111,9 +112,22 @@ async function getStream(kind) {
     });
   }
 
+  // `suppressLocalAudioPlayback`: trình duyệt VẪN gửi âm thanh tab vào luồng
+  // chia sẻ nhưng KHÔNG phát nó ra loa của bạn.
+  //
+  // Đây là cách đúng để chỉ nghe bản dịch. Bấm tắt tiếng trong YouTube thì
+  // KHÔNG được: lúc đó trang tạo ra im lặng, nên luồng chia sẻ cũng im lặng
+  // và hệ thống chẳng nghe thấy gì.
+  //
+  // Là ràng buộc riêng của Chromium và chỉ có tác dụng khi chia sẻ một TAB.
+  // Trình duyệt không hỗ trợ thì bỏ qua lặng lẽ, nên phải tự kiểm và báo.
+  const tatTiengGoc = ui.muteSource?.checked !== false;
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: true,
-    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    audio: {
+      echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+      suppressLocalAudioPlayback: tatTiengGoc,
+    },
   });
   for (const track of stream.getVideoTracks()) {
     track.stop();
@@ -125,7 +139,36 @@ async function getStream(kind) {
       + "'Chia sẻ âm thanh tab' trong hộp thoại."
     );
   }
+  if (tatTiengGoc && !hoTroTatTiengGoc()) {
+    log("file", "trình duyệt không hỗ trợ tắt tiếng gốc — bạn sẽ nghe cả tiếng "
+      + "gốc lẫn bản dịch. ĐỪNG tắt tiếng trong YouTube, làm vậy hệ thống cũng "
+      + "không nghe được.");
+  }
   return stream;
+}
+
+/** Trình duyệt có nhận ràng buộc tắt tiếng gốc không.
+ *
+ * Ràng buộc không được hỗ trợ thì bị BỎ QUA LẶNG LẼ — không lỗi, không cảnh
+ * báo. Người dùng chỉ thấy vẫn nghe tiếng gốc mà không hiểu vì sao. */
+function hoTroTatTiengGoc() {
+  const ok = navigator.mediaDevices?.getSupportedConstraints?.();
+  return Boolean(ok && ok.suppressLocalAudioPlayback);
+}
+
+/** Bật/tắt tiếng gốc ngay giữa lúc đang nghe, không phải chia sẻ lại. */
+async function apDungTatTiengGoc() {
+  if (state.captureSource !== "device" || !state.stream) return;
+  const tat = ui.muteSource.checked;
+  for (const track of state.stream.getAudioTracks()) {
+    try {
+      await track.applyConstraints({ suppressLocalAudioPlayback: tat });
+    } catch (err) {
+      log("error", `không đổi được tiếng gốc: ${err.message}`);
+      return;
+    }
+  }
+  log("file", tat ? "đã tắt tiếng gốc" : "đã bật lại tiếng gốc");
 }
 
 async function startCapture(kind = "mic") {
@@ -938,6 +981,7 @@ ui.autoPause.onchange = () => {
 
 ui.toggle.onclick = () => (state.running ? stop() : start("mic"));
 ui.captureDevice.onclick = () => (state.running ? stop() : start("device"));
+ui.muteSource.onchange = () => { apDungTatTiengGoc(); };
 ui.stopTts.onclick = () => {
   stopPlayback();
   if (state.ws?.readyState === WebSocket.OPEN) {
