@@ -39,7 +39,31 @@ main {
 .panel.accent { border-color: #24405f; }
 .partial { color: var(--dim); font-style: italic; margin: 0 0 6px; min-height: 1.5em; }
 .final { margin: 0; font-size: 16px; min-height: 1.5em; }
-.translation { font-size: 19px; line-height: 1.45; margin: 0; min-height: 1.5em; color: #cfe3ff; }
+/* Khung lịch sử bản dịch, kiểu tin nhắn: mới nhất ở DƯỚI CÙNG.
+   Cao cố định + cuộn, để panel không đẩy phần còn lại của trang đi mất khi
+   hội thoại dài. */
+.chat {
+  display: flex; flex-direction: column; gap: 10px;
+  max-height: 46vh; min-height: 120px; overflow-y: auto;
+  padding-right: 6px; scroll-behavior: smooth;
+}
+.chat .msg {
+  border-left: 3px solid #24405f; padding: 2px 0 2px 11px;
+  animation: hienra .18s ease-out;
+}
+.chat .msg.coach { border-left-color: var(--ok); }
+/* Câu đang dịch dở — làm mờ để phân biệt với câu đã xong. */
+.chat .msg.streaming { opacity: .72; }
+.chat .msg .src {
+  font-size: 12px; color: var(--dim); margin: 0 0 3px;
+  overflow-wrap: anywhere;
+}
+.chat .msg .txt {
+  font-size: 19px; line-height: 1.45; margin: 0; color: #cfe3ff;
+  overflow-wrap: anywhere;
+}
+.chat .msg.coach .txt { color: var(--ok); }
+@keyframes hienra { from { opacity: 0; transform: translateY(4px); } }
 .meta { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--dim); }
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
 .metrics div { text-align: center; }
@@ -87,5 +111,5 @@ main {
 .steps li.done   { border-color: var(--ok); color: var(--ok); }
 .steps li.skip   { opacity: .35; text-decoration: line-through; }
 /* Chiều dịch ngược: câu để NÓI THEO, không phải để đọc hiểu */
-.translation.coach { color: var(--ok); }
+
 .hint { margin: 8px 0 0; font-size: 12px; color: var(--ok); }

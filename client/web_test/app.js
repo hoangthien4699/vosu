@@ -22,10 +22,11 @@ const ui = {
   status: el("status"), toggle: el("toggle"), stopTts: el("stopTts"),
   utteranceId: el("utteranceId"), partial: el("partial"), final: el("final"),
   lang: el("lang"), sttLatency: el("sttLatency"),
-  translation: el("translation"), translationTitle: el("translationTitle"),
+  translationTitle: el("translationTitle"),
   coachHint: el("coachHint"),
   log: el("log"), pickFile: el("pickFile"), fileInput: el("fileInput"),
   pauseBtn: el("pauseBtn"), autoPause: el("autoPause"), captureDevice: el("captureDevice"),
+  chat: el("chat"), chatCount: el("chatCount"),
   autoPauseWrap: el("autoPauseWrap"), filePanel: el("filePanel"),
   fileName: el("fileName"), fileBar: el("fileBar"), filePos: el("filePos"),
   fileState: el("fileState"), reviewSteps: el("reviewSteps"),
@@ -288,6 +289,7 @@ function onEvent(event) {
     case "session_started":
       state.ttsEnabled = data.tts_enabled;
       setStatus(`đã kết nối · ${data.platform}`, "on");
+      xoaChat();
       log(type, `platform=${data.platform} tts=${data.tts_enabled}`);
       break;
 
@@ -357,22 +359,30 @@ function onEvent(event) {
     }
 
     case "copilot_started":
-      ui.translation.textContent = "";
+      moBongBong(uttId, data.source_text, data.direction);
+      applyDirection(data.direction);
       break;
 
-    case "translation_delta":
-      ui.translation.textContent = data.full;
+    case "translation_delta": {
+      const msg = bongBong(uttId) || moBongBong(uttId, "", data.direction);
+      msg.querySelector(".txt").textContent = data.full;
       applyDirection(data.direction);
       if (state.utt) state.utt.translation = data.full;
+      cuonXuongCuoi();
       markUseful();
       break;
+    }
 
 
-    case "copilot_done":
+    case "copilot_done": {
+      // Bỏ mờ: câu này đã dịch xong, phân biệt với câu đang chạy dở.
+      const msg = bongBong(uttId);
+      if (msg) msg.classList.remove("streaming");
       ui.mTtft.textContent = ms(data.ttft_ms);
       log(type, `ttft=${ms(data.ttft_ms)} total=${ms(data.total_ms)} tokens=${data.tokens}${data.truncated ? " (BỊ CẮT)" : ""}`);
       maybeStartReview();
       break;
+    }
 
     case "tts_started":
       ui.stopTts.disabled = false;
@@ -418,6 +428,57 @@ function onEvent(event) {
   }
 }
 
+/* ---------------- lịch sử bản dịch, kiểu tin nhắn -------------------- */
+
+/* Vì sao là lịch sử chứ không phải một dòng: trước đây mỗi câu mới GHI ĐÈ câu
+ * trước, nên khi người ta nói nhanh thì bản dịch biến mất trước khi đọc kịp.
+ * Câu mới giờ xuống DƯỚI CÙNG, câu cũ ở trên và vẫn đọc lại được.            */
+const CHAT_TOI_DA = 60;
+
+function moBongBong(uttId, sourceText, direction) {
+  const msg = document.createElement("div");
+  msg.className = "msg streaming";
+  msg.dataset.utt = uttId || "";
+  if (direction === "to_counterpart") msg.classList.add("coach");
+
+  const src = document.createElement("p");
+  src.className = "src";
+  src.textContent = sourceText || "";
+  const txt = document.createElement("p");
+  txt.className = "txt";
+  txt.textContent = "…";
+
+  msg.appendChild(src);
+  msg.appendChild(txt);
+  ui.chat.appendChild(msg);
+
+  while (ui.chat.childElementCount > CHAT_TOI_DA) ui.chat.removeChild(ui.chat.firstChild);
+  ui.chatCount.textContent = `${ui.chat.childElementCount} câu`;
+  cuonXuongCuoi();
+  return msg;
+}
+
+function bongBong(uttId) {
+  // Câu đang dịch dở, hoặc câu cuối nếu vì lý do nào đó chưa mở bong bóng.
+  if (uttId) {
+    const found = ui.chat.querySelector(`.msg[data-utt="${uttId}"]`);
+    if (found) return found;
+  }
+  return ui.chat.lastElementChild;
+}
+
+function cuonXuongCuoi() {
+  // Chỉ tự cuộn khi người dùng đang ở gần đáy — họ cuộn lên đọc câu cũ thì
+  // đừng giật họ về.
+  const gap = ui.chat.scrollHeight - ui.chat.scrollTop - ui.chat.clientHeight;
+  if (gap < 140) ui.chat.scrollTop = ui.chat.scrollHeight;
+}
+
+function xoaChat() {
+  ui.chat.textContent = "";
+  ui.chatCount.textContent = "";
+}
+
 /* Hai chiều: đối phương nói -> đây là bản dịch để HIỂU;
  * bạn nói -> đây là câu tiếng đối phương để NÓI THEO.
  * Nhãn phải đổi, nếu không người dùng không biết mình đang nhìn cái gì.     */
@@ -426,7 +487,8 @@ function applyDirection(direction) {
   const outbound = direction === "to_counterpart";
   ui.translationTitle.textContent = outbound ? "Bạn nói — hãy đọc theo" : "Bản dịch";
   ui.coachHint.hidden = !outbound;
-  ui.translation.classList.toggle("coach", outbound);
+  const msg = ui.chat.lastElementChild;
+  if (msg) msg.classList.toggle("coach", outbound);
 }
 
 function markUseful() {
