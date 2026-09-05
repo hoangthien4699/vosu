@@ -32,7 +32,8 @@ import statistics
 import sys
 import time
 
-sys.path.insert(0, "backend"); sys.path.insert(0, ".")
+sys.path.insert(0, "backend")
+sys.path.insert(0, ".")
 from benchmarks.fidelity_cases import ALL, has_particle, inverted, missing
 
 HE_THONG = """Bạn là người Việt, đang nói chuyện với đồng nghiệp.
@@ -55,8 +56,10 @@ async def main():
     from app.core.vram_manager import LlamaServerManager
 
     config = load_config()
-    manager = LlamaServerManager(config); await manager.start()
-    client = LlmClient(config); await client.start()
+    manager = LlamaServerManager(config)
+    await manager.start()
+    client = LlmClient(config)
+    await client.start()
     try:
         for nhan, bat in (("MỘT LƯỢT (nền)", False), ("HAI LƯỢT", True)):
             rows, lat = [], []
@@ -67,7 +70,9 @@ async def main():
                 raw, _ = await client.complete(
                     client.build_prompt(c.text, c.lang, direction=d,
                                         counterpart_language="en"))
-                par = SemanticEventParser(); par.feed(raw); par.finish()
+                par = SemanticEventParser()
+                par.feed(raw)
+                par.finish()
                 dich = par.result.translation
                 # Chỉ chỉnh văn cho ĐẦU RA TIẾNG VIỆT — tiểu từ là chuyện của
                 # tiếng Việt, câu tiếng Anh thì không liên quan.
@@ -96,6 +101,7 @@ async def main():
             print(f"    CÓ tiểu từ      : {co_tu}/{len(casual)}")
             print(f"    P50 mỗi câu     : {statistics.median(lat):.0f}ms")
     finally:
-        await client.close(); await manager.stop()
+        await client.close()
+        await manager.stop()
 
 asyncio.run(main())
