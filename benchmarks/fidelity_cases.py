@@ -147,7 +147,132 @@ OUTBOUND = [
     ),
 ]
 
-ALL = INBOUND + OUTBOUND
+
+# --------------------------------------------------------------------------- #
+# Bộ KHÓ — thêm khi bộ cũ chạm trần
+#
+# Bộ ban đầu đo ra 34/35 yếu tố, 0 câu đảo nghĩa, 0 từ khô. Chạm trần thì không
+# so được cái gì với cái gì nữa: mọi thay đổi đều ra cùng một điểm, và ta lại
+# rơi vào cảnh đo nhiễu như hồi chỉnh temperature.
+#
+# Các loại lỗi ở đây là thứ model 4B thật sự còn vấp:
+#   thành ngữ, phạm vi phủ định, tình thái (might/should/must),
+#   xưng hô tiếng Việt, câu nhiều mệnh đề, chủ ngữ mơ hồ.
+#
+# CẢNH BÁO ĐÃ TRẢ GIÁ: lần chạy đầu báo 7 ca hỏng, nhưng 4 trong đó là lỗi của
+# CHÍNH BỘ THỬ chứ không phải của model — "tạm bỏ" dịch đúng `table that`,
+# "chậm chạp" dịch đúng `dragging their feet`, "reschedule" dịch đúng "lùi
+# lịch", và "không thể LÀ không nói" chỉ thừa một chữ làm lệch khớp chuỗi.
+#
+# `must_keep` phải liệt kê MỌI cách dịch đúng, không phải cách mình nghĩ ra
+# đầu tiên. Siết quá thì tối ưu model theo một cái thước cong.
+# --------------------------------------------------------------------------- #
+
+HARD_INBOUND = [
+    Case(
+        "en", "Let's table that and circle back after lunch.",
+        must_keep=[["hoãn", "gác lại", "để sau", "tạm dừng", "gác", "tạm bỏ",
+                    "bỏ qua", "dừng"],
+                   ["quay lại", "bàn lại", "trở lại", "nói tiếp"]],
+        forbid=["đặt lên bàn", "đặt bàn", "lên bàn"],
+        casual=True,
+        note="hai thành ngữ trong một câu; dịch đen là 'đặt lên bàn'",
+    ),
+    Case(
+        "en", "We can't not tell them at this point.",
+        must_keep=[["phải nói", "không thể không nói", "không thể là không nói",
+                    "buộc phải", "đành phải"]],
+        forbid=["không được nói cho họ", "không thể nói cho họ biết"],
+        note="phủ định kép — dịch sai thành cấm nói",
+    ),
+    Case(
+        "en", "You might want to double-check that figure before Friday.",
+        must_keep=[["nên", "thử"], ["kiểm tra lại", "xem lại", "rà lại"],
+                   ["thứ sáu", "thứ 6"]],
+        forbid=["bắt buộc phải", "nhất định phải"],
+        note="might ≠ must; tình thái hay bị đẩy lên thành mệnh lệnh",
+    ),
+    Case(
+        "en", "Cut it from ninety days down to forty-five.",
+        must_keep=[["90", "chín mươi"], ["45", "bốn mươi lăm", "bốn lăm"]],
+        forbid=["49", "54", "40 lăm"],
+        note="hai số gần nhau, dễ đổi chỗ hoặc gộp",
+    ),
+    Case(
+        "en", "They're dragging their feet on the contract.",
+        must_keep=[["chần chừ", "trì hoãn", "kéo dài", "dây dưa", "lần lữa",
+                    "chậm trễ", "câu giờ", "chậm chạp", "ì ạch"]],
+        forbid=["kéo chân", "lê chân", "kéo lê bàn chân"],
+        note="thành ngữ; dịch đen thành động tác chân",
+    ),
+    Case(
+        "en", "If the vendor misses the date again, we escalate to their "
+              "director, and I want it in writing this time.",
+        must_keep=[["trễ", "lỡ", "chậm", "không kịp"],
+                   ["giám đốc"],
+                   ["văn bản", "viết", "giấy tờ"],
+                   ["lần này"]],
+        note="ba mệnh đề; vế cuối hay bị nuốt",
+    ),
+    Case(
+        "en", "If we had signed last month, this wouldn't be a problem.",
+        must_keep=[["tháng trước"], ["ký"]],
+        forbid=["tháng tới", "tháng sau"],
+        note="giả định trái thực tế ở quá khứ",
+    ),
+    Case(
+        "en", "Would you mind holding off until I hear back from them?",
+        must_keep=[["chờ", "hoãn", "đợi", "khoan"]],
+        forbid=["bạn có phiền không"],
+        casual=True,
+        note="lời đề nghị lịch sự; dịch đen ra câu hỏi ngớ ngẩn",
+    ),
+]
+
+HARD_OUTBOUND = [
+    Case(
+        "vi", "Dạ anh cho em hỏi bên mình có thể lùi lịch một tuần được không ạ?",
+        must_keep=[["push", "postpone", "delay", "move", "put off",
+                    "reschedule", "push back"],
+                   ["a week", "one week"]],
+        forbid=["a month", "two weeks"],
+        note="xưng hô anh/em không có tương đương; phải ra câu hỏi lịch sự",
+    ),
+    Case(
+        "vi", "Không phải em không muốn làm, mà là không kịp.",
+        must_keep=[["not that", "it isn't that", "it's not"],
+                   ["time", "enough", "in time", "too late", "make it"]],
+        forbid=["i don't want to do it."],
+        note="phủ định kép; dịch sai thành từ chối thẳng",
+    ),
+    Case(
+        "vi", "Bên đó bảo là bên mình phải chịu phí vận chuyển.",
+        must_keep=[["shipping", "freight", "delivery", "transport"],
+                   ["we", "our", "us"]],
+        forbid=["they have to pay", "they will cover"],
+        note="hai bên trong một câu; dễ đảo ai trả tiền",
+    ),
+    Case(
+        "vi", "Thôi cứ để đấy đi, mai em xử lý nhé.",
+        must_keep=[["tomorrow"]],
+        forbid=["today", "tonight"],
+        note="câu đời thường, nhiều tiểu từ ở nguồn",
+    ),
+    Case(
+        "vi", "Giảm từ chín mươi ngày xuống còn bốn mươi lăm.",
+        must_keep=[["90", "ninety"], ["45", "forty-five", "forty five"]],
+        forbid=["49", "54"],
+        note="đối xứng với ca tiếng Anh, kiểm cả hai chiều",
+    ),
+    Case(
+        "vi", "Nếu tháng trước mình ký rồi thì giờ đã không phải lo.",
+        must_keep=[["last month"], ["sign"]],
+        forbid=["next month"],
+        note="giả định trái thực tế, chiều ngược",
+    ),
+]
+
+ALL = INBOUND + OUTBOUND + HARD_INBOUND + HARD_OUTBOUND
 
 
 def missing(case: Case, translation: str) -> list[list[str]]:
