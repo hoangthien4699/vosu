@@ -116,6 +116,9 @@ class FakeRuntime:
 def client():
     cfg = load_config(env={})
     cfg.tts.enabled = False           # TTS có test riêng; ở đây tách biệt
+    # Tính năng cần venv riêng thì test PHẢI nói rõ là tắt, không thừa
+    # hưởng config.yaml — nếu không mỗi phiên lại đi dựng tiến trình phụ.
+    cfg.stt.speaker_split = False
     cfg.vad.backend = "energy"        # không phụ thuộc file model
     cfg.chunker.enable_partial = False
 
@@ -281,6 +284,7 @@ def tts_client(monkeypatch, tmp_path):
     # Bộ test KHÔNG được phụ thuộc engine tùy chọn: `vieneu` cần venv riêng
     # và ~9s nạp model. Nói rõ ra thay vì thừa hưởng config.yaml.
     cfg.tts.engine = "piper"
+    cfg.stt.speaker_split = False
     cfg.tts.stream_by_sentence = True
     cfg.tts.min_sentence_chars = 8
     cfg.paths.piper_bin = sys.executable

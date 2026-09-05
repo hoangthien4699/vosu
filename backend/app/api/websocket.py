@@ -35,6 +35,7 @@ from ..ai.direction import Direction
 from ..ai.direction import resolve as resolve_direction
 from ..ai.history import ConversationHistory
 from ..ai.llm import GenerationStats
+from ..ai.speaker import SpeakerEmbedder, SpeakerTracker
 from ..ai.tts import SentenceSplitter, TtsUnavailable
 from ..ai.tts_router import create_tts
 from ..ai.verify import failure_reason, retry_hint
@@ -57,6 +58,18 @@ class _HeldSegment:
     transcript: object
     utterance_id: str
     merges: int
+    #: Người nói của mảnh này, hoặc None nếu không đủ chắc.
+    speaker: str | None = None
+
+
+def _doi_nguoi(truoc: str | None, sau: str | None) -> bool:
+    """Chắc chắn đã đổi người nói chưa.
+
+    Chỉ True khi BIẾT CẢ HAI và chúng khác nhau. Không biết một trong hai thì
+    trả False — quyết bừa theo hướng "người khác" sẽ cắt đôi một câu đang nói
+    dở, tệ hơn hẳn so với để cơ chế cũ xử lý.
+    """
+    return truoc is not None and sau is not None and truoc != sau
 
 
 def _join_segments(first: AudioSegment, second: AudioSegment) -> AudioSegment:
@@ -177,6 +190,13 @@ class CopilotSession:
         #: ngữ (câu ngắn), thay vì đoán bừa.
         self._last_direction = Direction.TO_USER
         self.tts = create_tts(config) if config.tts.enabled else None
+        #: Gom các đoạn nói thành người nói. Đổi người = mốc CHẮC CHẮN để
+        #: cắt câu, khác hẳn độ dài khoảng lặng vốn không tách được.
+        self.speakers = SpeakerTracker(
+            same_threshold=config.stt.speaker_same_threshold,
+            diff_threshold=config.stt.speaker_diff_threshold,
+        )
+        self.speakers_embedder = SpeakerEmbedder(config)
 
         vad = build_vad(config)
         self.chunker = AudioChunker(
@@ -237,6 +257,11 @@ class CopilotSession:
             self._tts_worker = asyncio.create_task(
                 self._tts_worker_loop(), name=f"tts-{self.session_id}"
             )
+
+        if self.config.stt.speaker_split:
+            # Tiến trình phụ mất ~9.4s khởi động (dựng phiên ONNX + làm nóng).
+            # Không gọi ở đây thì CÂU ĐẦU TIÊN gánh trọn ngần ấy.
+            self._loop.create_task(self.speakers_embedder.start())
 
         if self.tts is not None and getattr(self.tts, "needs_preload", False):
             # Engine có model thường trú thì nạp NGAY từ bây giờ, ở nền — tới
@@ -477,6 +502,16 @@ class CopilotSession:
                 except asyncio.CancelledError:
                     task.cancel()
                     raise
+                # Câu vừa xử lý có thể đã GIỮ LẠI một mảnh chờ ghép. Phép kiểm
+                # hết-giờ theo đồng hồ audio chỉ chạy khi có audio mới tới —
+                # mà audio có thể đã gửi hết từ trước. Kiểm ngay tại đây, chỗ
+                # duy nhất chắc chắn pipeline đã rảnh.
+                #
+                # Thiếu bước này thì mảnh câu phải chờ tới lưới dự phòng đồng
+                # hồ thật (15s) mới được dịch. Đã đo: một test từ 0.33s lên
+                # 15.01s.
+                if self._held is not None:
+                    await self._expire_hold_by_audio()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -535,19 +570,47 @@ class CopilotSession:
         # Whisper trên audio liền mạch cho ra câu đúng ngữ pháp hơn hẳn.
         held = self._held
         merges = 0
-        if held is not None:
+        speaker: str | None = None
+
+        if held is None:
+            # Đường phổ biến: nghe và trích vector giọng SONG SONG. Whisper mất
+            # ~2s, trích vector ~440ms — chạy cùng lúc thì vector miễn phí.
+            async with self.runtime.job("stt_final"):
+                transcript, vector = await asyncio.gather(
+                    self.runtime.stt.transcribe(segment.pcm, is_final=True),
+                    self._embed(segment),
+                )
+            speaker = self.speakers.assign(vector) if vector is not None else None
+        else:
+            # Có mảnh câu đang giữ: phải biết giọng TRƯỚC mới quyết được có
+            # ghép hay không, nên trích trước rồi mới nghe. Tốn thêm ~440ms,
+            # nhưng chỉ ở nhánh này.
             self._cancel_hold_timer()
             self._held = None
-            segment = _join_segments(held.segment, segment)
-            merges = held.merges + 1
-            self._retire(held.utterance_id)
-            logger.info(
-                "%s: ghép %s vào %s (lần %d) — câu trước còn dở",
-                self.session_id, held.utterance_id, utterance_id, merges,
-            )
+            vector = await self._embed(segment)
+            speaker = self.speakers.assign(vector) if vector is not None else None
 
-        async with self.runtime.job("stt_final"):
-            transcript = await self.runtime.stt.transcribe(segment.pcm, is_final=True)
+            if _doi_nguoi(held.speaker, speaker):
+                # ĐỔI NGƯỜI NÓI = câu trước đã xong, chắc chắn. Không ghép.
+                # Đây là thứ độ dài khoảng lặng không bao giờ nói được: khoảng
+                # ngập ngừng giữa câu (800ms) còn dài hơn khoảng nghỉ giữa hai
+                # câu (700ms).
+                logger.info(
+                    "%s: %s đổi người nói (%s -> %s) — không ghép",
+                    self.session_id, utterance_id, held.speaker, speaker,
+                )
+                await self._flush_held(held)
+            else:
+                segment = _join_segments(held.segment, segment)
+                merges = held.merges + 1
+                self._retire(held.utterance_id)
+                logger.info(
+                    "%s: ghép %s vào %s (lần %d) — câu trước còn dở",
+                    self.session_id, held.utterance_id, utterance_id, merges,
+                )
+
+            async with self.runtime.job("stt_final"):
+                transcript = await self.runtime.stt.transcribe(segment.pcm, is_final=True)
 
         if transcript.is_empty:
             logger.debug("%s: %s transcript rỗng", self.session_id, utterance_id)
@@ -555,12 +618,29 @@ class CopilotSession:
             return
 
         if self._should_hold(transcript.text, segment, merges):
-            await self._hold_for_more(segment, transcript, utterance_id, merges)
+            await self._hold_for_more(segment, transcript, utterance_id, merges, speaker)
             return
 
         await self._after_transcript(segment, transcript, utterance_id, utterance)
 
     # -- gộp câu bị ngắt giữa chừng --------------------------------------- #
+
+    async def _embed(self, segment: AudioSegment):
+        if not self.config.stt.speaker_split:
+            return None
+        return await self.speakers_embedder.embed(segment.pcm)
+
+    async def _flush_held(self, held: _HeldSegment) -> None:
+        """Đẩy mảnh câu đang giữ đi tiếp như một câu riêng.
+
+        Dùng khi đổi người nói: câu trước đã xong, đừng bắt nó chờ ghép nữa.
+        """
+        utterance = self.state.get(held.utterance_id)
+        if utterance is None or utterance.is_terminal:
+            return
+        await self._after_transcript(
+            held.segment, held.transcript, held.utterance_id, utterance
+        )
 
     def _should_hold(self, text: str, segment: AudioSegment, merges: int) -> bool:
         cfg = self.config.stt
@@ -571,7 +651,8 @@ class CopilotSession:
         return not looks_complete(text)
 
     async def _hold_for_more(
-        self, segment: AudioSegment, transcript, utterance_id: str, merges: int
+        self, segment: AudioSegment, transcript, utterance_id: str, merges: int,
+        speaker: str | None = None,
     ) -> None:
         """Giữ câu dở lại, chờ xem người ta có nói tiếp không.
 
@@ -579,7 +660,7 @@ class CopilotSession:
         nghe `utterance_endpoint`. Không báo thì nó dừng vĩnh viễn — audio cần
         để quyết định sẽ không bao giờ tới.
         """
-        self._held = _HeldSegment(segment, transcript, utterance_id, merges)
+        self._held = _HeldSegment(segment, transcript, utterance_id, merges, speaker)
         logger.info(
             "%s: %s nghe ra câu dở (%r) — chờ nói tiếp",
             self.session_id, utterance_id, transcript.text[:48],
@@ -1229,6 +1310,8 @@ class CopilotSession:
     # -- dọn dẹp ---------------------------------------------------------- #
 
     async def _cancel_all_work(self) -> None:
+        with contextlib.suppress(Exception):
+            await self.speakers_embedder.close()
         if self.tts is not None:
             await self.tts.cancel(reason="session_end")
         self._drain_tts_queue()
