@@ -42,9 +42,17 @@ sys.path.insert(0, "benchmarks")
 from stt_cases import CASES
 
 WAV = pathlib.Path("benchmarks/audio/stt_wer")
-from vieneu import Vieneu
 
-tts = Vieneu(backend="onnx")
+
+def _engine():
+    # Import trong hàm: gói `vieneu` chỉ có trong venv riêng (.venv-vieneu),
+    # import ở đầu file thì mọi công cụ tĩnh chạy bằng venv chính đều gãy.
+    from vieneu import Vieneu
+
+    return Vieneu(backend="onnx")
+
+
+tts = _engine()
 
 def dai(f):
     with wave.open(str(f)) as h:
