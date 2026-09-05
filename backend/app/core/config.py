@@ -127,6 +127,19 @@ class SttConfig:
     beam_size: int = 1
     # Whisper tự nhận diện ngôn ngữ (LID). None = auto.
     language: str | None = None
+    #: ĐÃ ĐO — đừng bật phiên âm dần với hy vọng bản dịch ra sớm hơn.
+    #:
+    #: Chi phí Whisper gần như CỐ ĐỊNH, không theo độ dài audio: 0.5s audio
+    #: tốn 1655ms, 4.0s audio tốn 1771ms — 8 lần audio chỉ thêm 7%.
+    #: faster-whisper đệm mọi đoạn lên cửa sổ 30 giây rồi mới chạy encoder.
+    #: Xem benchmarks/stt_scaling.py.
+    #:
+    #: Nên mỗi lần phiên âm giữa chừng tốn gần bằng lần cuối. Đây là lý do
+    #: `enable_partial` trên Mac làm độ trễ TRƯỢT DẦN 644 -> 1106 -> 1552ms
+    #: qua từng câu và một câu mất hẳn phần đọc.
+    #:
+    #: Hệ quả tốt: ghép câu gần như miễn phí về tính toán — nghe đoạn dài gấp
+    #: đôi hầu như không tốn thêm.
     vad_filter: bool = False  # VAD đã làm ở tầng audio/, không làm lại trong Whisper
     partial_beam_size: int = 1
     condition_on_previous_text: bool = False
