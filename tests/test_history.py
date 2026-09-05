@@ -85,3 +85,27 @@ def test_set_translation_va_reply_cho_luot_khong_ton_tai_khong_no():
     h = make(1)
     h.set_translation("utt_khong_co", "x")
     assert len(h) == 1
+
+
+def test_history_turns_dem_ca_cau_dang_xu_ly():
+    """LỆCH MỘT ĐƠN VỊ — đã mắc phải.
+
+    `add()` chạy TRƯỚC `render(exclude=câu hiện tại)`, nên `max_turns` đếm cả
+    câu đang xử lý. Đặt `history_turns = 1` nghĩa là TẮT HẲN lịch sử: buffer
+    chỉ giữ đúng câu hiện tại, rồi câu đó bị exclude, còn lại rỗng.
+
+        history_turns = 1  ->  0 lượt trước  (tắt hẳn)
+        history_turns = 2  ->  1 lượt trước
+    """
+    h = ConversationHistory(max_turns=1, max_chars=1000)
+    h.add("utt_001", "Hello.", "en", is_user=False)
+    h.set_translation("utt_001", "Xin chào.")
+    h.add("utt_002", "How are you?", "en", is_user=False)
+    assert h.render(exclude="utt_002") == "", "max_turns=1 phải ra rỗng"
+
+    h = ConversationHistory(max_turns=2, max_chars=1000)
+    h.add("utt_001", "Hello.", "en", is_user=False)
+    h.set_translation("utt_001", "Xin chào.")
+    h.add("utt_002", "How are you?", "en", is_user=False)
+    ra = h.render(exclude="utt_002")
+    assert "Xin chào." in ra, f"max_turns=2 phải thấy đúng 1 lượt trước: {ra!r}"

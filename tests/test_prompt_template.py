@@ -17,7 +17,10 @@ def test_chatml_dung_dinh_dang_cua_qwen():
     assert prompt.startswith("<|im_start|>system\n")
     assert "<|im_start|>user\n" in prompt
     assert prompt.endswith("<|im_start|>assistant\n")
-    assert "live interpreter" in prompt
+    # Kiểm HỢP ĐỒNG ĐẦU RA, không kiểm câu chữ prompt: prompt sẽ còn được
+    # viết lại, mà mỗi lần viết lại làm đỏ một test không liên quan thì
+    # test đó đang đo sai thứ.
+    assert '{"translation":"..."}' in prompt
     assert "Hello there." in prompt
 
 
@@ -27,7 +30,7 @@ def test_gemma_gop_system_vao_luot_user():
     assert prompt.startswith("<start_of_turn>user\n")
     assert prompt.endswith("<start_of_turn>model\n")
     assert "system" not in prompt.split("\n")[0]
-    assert "live interpreter" in prompt
+    assert '{"translation":"..."}' in prompt
     assert "Hello there." in prompt
 
 
@@ -128,16 +131,18 @@ def test_payload_gui_kem_grammar():
 
 def test_chieu_thuan_dich_sang_tieng_nguoi_dung():
     prompt = system_prompt(Direction.TO_USER, user_language="vi")
-    assert "into Vietnamese" in prompt
-    assert "USER just spoke" not in prompt
+    assert "Target language: Vietnamese" in prompt
+    assert "The user just spoke" not in prompt
 
 
 def test_chieu_nguoc_dich_sang_tieng_doi_phuong():
     prompt = system_prompt(
         Direction.TO_COUNTERPART, user_language="vi", counterpart_language="en"
     )
-    assert "spoke in Vietnamese" in prompt
-    assert "into English" in prompt
+    assert "Source language: Vietnamese" in prompt
+    assert "Target language: English" in prompt
+    # Người dùng phải NÓI THEO bản dịch này — chỉ dẫn có nghĩa, không phải
+    # câu chữ trang trí.
     assert "say it out loud" in prompt
 
 
@@ -146,7 +151,7 @@ def test_chieu_nguoc_theo_dung_tieng_doi_phuong_that():
     prompt = system_prompt(
         Direction.TO_COUNTERPART, user_language="vi", counterpart_language="ja"
     )
-    assert "into Japanese" in prompt
+    assert "Target language: Japanese" in prompt
 
 
 def test_prompt_danh_dau_ai_dang_noi():
@@ -219,3 +224,34 @@ def test_auto_phan_biet_qwen3_voi_qwen2(gguf, expected):
     cfg.paths.llm_gguf = gguf
     cfg.llm.prompt_template = "auto"
     assert resolve_template(cfg).name == expected
+
+
+def test_chi_nhac_tieu_tu_khi_dich_sang_tieng_viet():
+    """Tiểu từ tình thái là chuyện của tiếng Việt.
+
+    Nêu "nhé/ạ/nhỉ" khi đích là tiếng Anh hay tiếng Nhật thì chỉ tổ làm nhiễu —
+    model không có gì để làm với chỉ dẫn đó.
+    """
+    vi = system_prompt(Direction.TO_USER, user_language="vi")
+    assert "nhé" in vi
+
+    en = system_prompt(
+        Direction.TO_COUNTERPART, user_language="vi", counterpart_language="en"
+    )
+    assert "nhé" not in en
+
+    ja = system_prompt(
+        Direction.TO_COUNTERPART, user_language="vi", counterpart_language="ja"
+    )
+    assert "nhé" not in ja
+
+
+def test_prompt_van_neu_ro_dau_vao_la_loi_noi():
+    """Đầu vào là văn bản do STT sinh — lời NÓI, không phải câu viết chuẩn.
+
+    Đây là lý do model được phép dựng lại cấu trúc câu. Bỏ ý này đi thì nó quay
+    về dịch bám mặt chữ.
+    """
+    prompt = system_prompt(Direction.TO_USER, user_language="vi")
+    assert "speech recognition" in prompt
+    assert "SPOKEN" in prompt

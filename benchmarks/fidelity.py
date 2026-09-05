@@ -20,7 +20,8 @@ from .common import REPO_ROOT, Distribution, environment
 from .fidelity_cases import ALL, has_particle, inverted, missing, stiff_hits
 
 
-async def run(model: Path | None, temperature: float | None, n_predict: int | None):
+async def run(model: Path | None, temperature: float | None, n_predict: int | None,
+              history_turns: int = 0):
     from app.ai.copilot import SemanticEventParser
     from app.ai.direction import Direction
     from app.ai.llm import LlmClient, language_name
@@ -42,6 +43,16 @@ async def run(model: Path | None, temperature: float | None, n_predict: int | No
     await client.start()
 
     rows, latencies, retried = [], [], 0
+    # Lịch sử hội thoại đang chạy. Production LUÔN truyền `history` vào
+    # `build_prompt` (history_turns=6), nhưng bộ đo này thì không — nên mọi số
+    # đo trước giờ đều ở điều kiện KHÔNG NGỮ CẢNH, khác hệ thống thật.
+    #
+    # Lưu ý phạm vi: 26 ca là câu ĐỘC LẬP, không phải một cuộc nói chuyện. Nạp
+    # lượt trước vào đây mô phỏng ĐÚNG CẤU HÌNH production, nhưng KHÔNG mô
+    # phỏng được lợi ích thật của ngữ cảnh (xem benchmarks/context_ab.py). Nó
+    # trả lời một câu khác: lịch sử KHÔNG LIÊN QUAN có làm hỏng bản dịch không
+    # — rủi ro có thật khi người ta đổi chủ đề giữa chừng.
+    lich_su: list[str] = []
     try:
         await client.complete(client.build_prompt("Hello.", "en"))  # warm-up
         for case in ALL:
@@ -51,6 +62,7 @@ async def run(model: Path | None, temperature: float | None, n_predict: int | No
                 client.build_prompt(
                     case.text, case.lang,
                     direction=direction, counterpart_language="en",
+                    history="\n".join(lich_su[-history_turns:]) if history_turns else "",
                 )
             )
             parser = SemanticEventParser()
@@ -82,6 +94,9 @@ async def run(model: Path | None, temperature: float | None, n_predict: int | No
                 translation = parser.result.translation
                 total_ms += stats.total_ms
 
+            if history_turns:
+                who = "You" if outbound else "Them"
+                lich_su.append(f'{who}: "{translation}"')
             rows.append((case, translation, missing(case, translation)))
             latencies.append(total_ms)
     finally:
@@ -97,6 +112,8 @@ def main() -> int:
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--n-predict", type=int, default=None)
     parser.add_argument("--label", default="")
+    parser.add_argument("--history-turns", type=int, default=0,
+                        help="số lượt trước nạp vào prompt, như production")
     parser.add_argument("-q", "--quiet", action="store_true",
                         help="chỉ in tổng kết, không in từng câu")
     args = parser.parse_args()
@@ -109,7 +126,7 @@ def main() -> int:
         return 2
 
     config, rows, latencies, retried = asyncio.run(
-        run(model, args.temperature, args.n_predict)
+        run(model, args.temperature, args.n_predict, args.history_turns)
     )
 
     total_elements = sum(len(c.must_keep) for c, _, _ in rows)
